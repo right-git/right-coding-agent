@@ -10,7 +10,7 @@ from src.main import process_user_turn
 class ProcessUserTurnTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_turn_logs_and_surfaces_error(self):
         agents = Mock()
-        agents.right_code = AsyncMock(side_effect=RuntimeError("boom"))
+        agents.right_coding_agent = AsyncMock(side_effect=RuntimeError("boom"))
 
         ui = Mock()
         ui.loading.return_value = nullcontext()
@@ -32,7 +32,7 @@ class ProcessUserTurnTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_silent_turn_logs_and_surfaces_warning(self):
         agents = Mock()
-        agents.right_code = AsyncMock(
+        agents.right_coding_agent = AsyncMock(
             return_value={
                 "messages": [
                     HumanMessage("test"),
@@ -75,7 +75,7 @@ class ProcessUserTurnTests(unittest.IsolatedAsyncioTestCase):
             HumanMessage("test"),
             AIMessage(content="done"),
         ]
-        agents.right_code = AsyncMock(return_value={"messages": response_messages})
+        agents.right_coding_agent = AsyncMock(return_value={"messages": response_messages})
 
         ui = Mock()
         ui.loading.return_value = nullcontext()

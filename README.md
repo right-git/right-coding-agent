@@ -1,6 +1,6 @@
-# right_code
+# Right Coding Agent
 
-`right_code` is an asynchronous agent supporting multiple model providers, built on LangChain and designed as a programmer's assistant.
+`right-coding-agent` is an asynchronous agent supporting multiple model providers, built on LangChain and designed as a programmer's assistant.
 
 ## Overview
 
@@ -32,7 +32,7 @@
 - `src/config/prompts.py` — stores system prompts.
 - `src/llm/` — agent core:
   - `base.py` manages the LLM client;
-  - `agents.py` implements specific agents (such as `right_code()`);
+  - `agents.py` implements specific agents (such as `right_coding_agent()`);
   - `tools.py` — utility LangChain tools.
 - `src/tools/web_parser/` — standalone HTTP client and HTML-to-Markdown parser.
 - Tests are located in `tests/`.

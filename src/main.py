@@ -70,7 +70,7 @@ async def process_user_turn(
 
     try:
         with ui.loading("thinking"):
-            response = await agents.right_code(
+            response = await agents.right_coding_agent(
                 messages=working_messages,
                 model=model,
             )

@@ -15,7 +15,7 @@ from .base import LLMClient
 
 
 class Agents(LLMClient):
-    async def right_code(
+    async def right_coding_agent(
         self,
         messages: list[HumanMessage | AIMessage | ToolMessage],
         model: str,
@@ -33,7 +33,7 @@ class Agents(LLMClient):
         ]
 
         response = await self.ask_agent(
-            system_prompt=Prompts.right_code_sys,
+            system_prompt=Prompts.right_coding_agent_sys,
             model_name=model,
             agent_input={"messages": messages},
             tools=tools,

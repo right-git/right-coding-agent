@@ -16,7 +16,7 @@ from src.ui import ChatUI
 
 
 class AgentFilesystemConfigTests(unittest.IsolatedAsyncioTestCase):
-    async def test_right_code_uses_persistent_filesystem_backend(self):
+    async def test_right_coding_agent_uses_persistent_filesystem_backend(self):
         agent = Agents(
             [
                 LLMProvider(
@@ -28,7 +28,7 @@ class AgentFilesystemConfigTests(unittest.IsolatedAsyncioTestCase):
         )
         agent.ask_agent = AsyncMock(return_value={"messages": []})
 
-        await agent.right_code(
+        await agent.right_coding_agent(
             messages=[HumanMessage("create test.txt")],
             model="openai/gpt-4.1-mini",
             thread_id="thread-1",
@@ -43,7 +43,7 @@ class AgentFilesystemConfigTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ToolContractTests(unittest.IsolatedAsyncioTestCase):
-    async def test_right_code_keeps_explicit_tools(self):
+    async def test_right_coding_agent_keeps_explicit_tools(self):
         agent = Agents(
             [
                 LLMProvider(
@@ -55,7 +55,7 @@ class ToolContractTests(unittest.IsolatedAsyncioTestCase):
         )
         agent.ask_agent = AsyncMock(return_value={"messages": []})
 
-        await agent.right_code(
+        await agent.right_coding_agent(
             messages=[HumanMessage("list files")],
             model="openai/gpt-4.1-mini",
             thread_id="thread-2",
@@ -71,7 +71,7 @@ class ToolContractTests(unittest.IsolatedAsyncioTestCase):
             ["web_search", "duckduckgo_search"],
         )
 
-    async def test_right_code_uses_required_middlewares(self):
+    async def test_right_coding_agent_uses_required_middlewares(self):
         agent = Agents(
             [
                 LLMProvider(
@@ -83,7 +83,7 @@ class ToolContractTests(unittest.IsolatedAsyncioTestCase):
         )
         agent.ask_agent = AsyncMock(return_value={"messages": []})
 
-        await agent.right_code(
+        await agent.right_coding_agent(
             messages=[HumanMessage("delete AGENTS.md using shell")],
             model="openai/gpt-4.1-mini",
         )
@@ -94,11 +94,11 @@ class ToolContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(isinstance(middleware, FilesystemMiddleware) for middleware in middlewares))
 
     def test_system_prompt_does_not_list_tools(self):
-        self.assertNotIn("## Tools", Prompts.right_code_sys)
-        self.assertNotIn("**read_file**", Prompts.right_code_sys)
-        self.assertNotIn("**write_file**", Prompts.right_code_sys)
-        self.assertNotIn("**edit_file**", Prompts.right_code_sys)
-        self.assertNotIn("**execute**", Prompts.right_code_sys)
+        self.assertNotIn("## Tools", Prompts.right_coding_agent_sys)
+        self.assertNotIn("**read_file**", Prompts.right_coding_agent_sys)
+        self.assertNotIn("**write_file**", Prompts.right_coding_agent_sys)
+        self.assertNotIn("**edit_file**", Prompts.right_coding_agent_sys)
+        self.assertNotIn("**execute**", Prompts.right_coding_agent_sys)
 
 
 class ConversationStateTests(unittest.TestCase):
