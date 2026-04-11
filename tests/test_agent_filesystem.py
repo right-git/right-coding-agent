@@ -1,0 +1,219 @@
+import unittest
+from io import StringIO
+from unittest.mock import AsyncMock, Mock
+
+from deepagents.middleware.filesystem import FilesystemMiddleware
+from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import HumanMessage
+from rich.console import Console
+
+from src.config.prompts import Prompts
+from src.llm.agents import Agents
+from src.llm.base import LLMClient
+from src.llm.types import LLMProvider
+from src.main import available_models, trim_incomplete_tool_calls
+from src.ui import ChatUI
+
+
+class AgentFilesystemConfigTests(unittest.IsolatedAsyncioTestCase):
+    async def test_right_code_uses_persistent_filesystem_backend(self):
+        agent = Agents(
+            [
+                LLMProvider(
+                    provider_name="openai",
+                    api_key="test-key",
+                    api_base="http://localhost",
+                )
+            ]
+        )
+        agent.ask_agent = AsyncMock(return_value={"messages": []})
+
+        await agent.right_code(
+            messages=[HumanMessage("create test.txt")],
+            model="openai/gpt-4.1-mini",
+            thread_id="thread-1",
+        )
+
+        middlewares = agent.ask_agent.await_args.kwargs["middlewares"]
+        filesystem = next(
+            middleware
+            for middleware in middlewares
+            if isinstance(middleware, FilesystemMiddleware)
+        )
+
+
+class ToolContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_right_code_keeps_explicit_tools(self):
+        agent = Agents(
+            [
+                LLMProvider(
+                    provider_name="openai",
+                    api_key="test-key",
+                    api_base="http://localhost",
+                )
+            ]
+        )
+        agent.ask_agent = AsyncMock(return_value={"messages": []})
+
+        await agent.right_code(
+            messages=[HumanMessage("list files")],
+            model="openai/gpt-4.1-mini",
+            thread_id="thread-2",
+        )
+
+        tool_names = [
+            getattr(tool, "name", getattr(tool, "__name__", str(tool)))
+            for tool in agent.ask_agent.await_args.kwargs["tools"]
+        ]
+
+        self.assertEqual(
+            tool_names,
+            ["web_search", "duckduckgo_search"],
+        )
+
+    async def test_right_code_uses_required_middlewares(self):
+        agent = Agents(
+            [
+                LLMProvider(
+                    provider_name="openai",
+                    api_key="test-key",
+                    api_base="http://localhost",
+                )
+            ]
+        )
+        agent.ask_agent = AsyncMock(return_value={"messages": []})
+
+        await agent.right_code(
+            messages=[HumanMessage("delete AGENTS.md using shell")],
+            model="openai/gpt-4.1-mini",
+        )
+
+        middlewares = agent.ask_agent.await_args.kwargs["middlewares"]
+
+        self.assertGreaterEqual(len(middlewares), 2)
+        self.assertTrue(any(isinstance(middleware, FilesystemMiddleware) for middleware in middlewares))
+
+    def test_system_prompt_does_not_list_tools(self):
+        self.assertNotIn("## Tools", Prompts.right_code_sys)
+        self.assertNotIn("**read_file**", Prompts.right_code_sys)
+        self.assertNotIn("**write_file**", Prompts.right_code_sys)
+        self.assertNotIn("**edit_file**", Prompts.right_code_sys)
+        self.assertNotIn("**execute**", Prompts.right_code_sys)
+
+
+class ConversationStateTests(unittest.TestCase):
+    def test_trim_incomplete_tool_calls_drops_broken_suffix(self):
+        messages = [
+            HumanMessage("delete the file"),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "execute",
+                        "args": {"command": "rm AGENTS.md"},
+                        "id": "call_1",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+        ]
+
+        trimmed = trim_incomplete_tool_calls(messages)
+
+        self.assertEqual(trimmed, [messages[0]])
+
+    def test_trim_incomplete_tool_calls_keeps_completed_tool_turn(self):
+        messages = [
+            HumanMessage("list files"),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "ls",
+                        "args": {"path": "/tmp"},
+                        "id": "call_1",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            ToolMessage(content="['/tmp/a']", tool_call_id="call_1", name="ls"),
+            AIMessage(content="done"),
+        ]
+
+        self.assertEqual(trim_incomplete_tool_calls(messages), messages)
+
+
+class ErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_single_provider_raises_root_cause(self):
+        client = LLMClient(
+            [
+                LLMProvider(
+                    provider_name="openai",
+                    api_key="test-key",
+                    api_base="http://localhost",
+                )
+            ],
+            num_retries=1,
+        )
+        client.build_chat_model = Mock(return_value=object())  # type: ignore[method-assign]
+
+        with self.assertRaisesRegex(RuntimeError, "boom"):
+            with unittest.mock.patch("src.llm.base.create_agent") as create_agent_mock:
+                agent = AsyncMock()
+                agent.ainvoke.side_effect = RuntimeError("boom")
+                create_agent_mock.return_value = agent
+                await client.ask_agent(
+                    system_prompt="test",
+                    agent_input={"messages": [HumanMessage("hi")]},
+                    model_name="openai/gpt-4.1-mini",
+                    tools=[],
+                    middlewares=[],
+                )
+
+
+class ModelSelectionTests(unittest.TestCase):
+    def test_available_models_include_default_codex_model(self):
+        self.assertIn("openai/gpt-5.1-codex-mini", available_models)
+
+
+class ChatUIRenderingTests(unittest.TestCase):
+    def test_print_response_hides_reasoning_payload_and_renders_text_block(self):
+        ui = ChatUI(model="openai/gpt-5.3-codex-mini")
+        ui.console = Console(
+            file=StringIO(),
+            record=True,
+            force_terminal=False,
+            width=120,
+        )
+
+        ui.print_response(
+            [
+                AIMessage(
+                    content=[
+                        {
+                            "id": "rs_tmp_ml51l6tbns",
+                            "summary": [],
+                            "type": "reasoning",
+                            "encrypted_content": "secret",
+                            "status": "completed",
+                            "format": "openai-responses-v1",
+                        },
+                        {
+                            "type": "text",
+                            "text": "README.md populated with project overview.",
+                            "annotations": [],
+                            "id": "msg_tmp_tejci35y9k",
+                        },
+                    ]
+                )
+            ]
+        )
+
+        rendered = ui.console.export_text()
+
+        self.assertIn("README.md populated with project overview.", rendered)
+        self.assertNotIn("encrypted_content", rendered)
+
+
+if __name__ == "__main__":
+    unittest.main()

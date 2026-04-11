@@ -1,0 +1,1 @@
+PYTHONPATH=./ uv run src/main.py

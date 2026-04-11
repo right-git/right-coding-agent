@@ -1,0 +1,20 @@
+[project]
+name = "right_code"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "beautifulsoup4>=4.14.3",
+    "ddgs>=9.13.0",
+    "deepagents>=0.5.1",
+    "html-to-markdown>=3.1.0",
+    "httpx>=0.28.1",
+    "langchain>=1.0.0",
+    "langchain-community>=0.4.1",
+    "langchain-openai>=1.1.12",
+    "loguru>=0.7.3",
+    "prompt-toolkit>=3.0.52",
+    "pydantic-settings>=2.13.1",
+    "rich>=14.3.3",
+]
