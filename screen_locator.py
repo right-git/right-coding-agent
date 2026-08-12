@@ -1,9 +1,11 @@
 import re
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
 import image_optimization
+from PIL import Image
 
 
 TargetMode = Literal["first", "all"]
@@ -82,3 +84,81 @@ def select_targets(
     if mode == "all":
         return list(detections)
     raise ValueError(f"Unsupported target mode: {mode}")
+
+
+Locate = Callable[[Image.Image, str], Sequence[Detection]]
+CaptureScreen = Callable[[], Image.Image]
+MovePointer = Callable[[int, int], None]
+SaveResult = Callable[[Image.Image, Sequence[Detection]], None]
+Input = Callable[[str], str]
+Output = Callable[[str], None]
+Pause = Callable[[float], None]
+
+_EXIT_COMMANDS = {"exit", "quit"}
+
+
+def parse_mode_command(command: str) -> TargetMode:
+    parts = command.strip().casefold().split()
+    if parts == [":mode", "first"]:
+        return "first"
+    if parts == [":mode", "all"]:
+        return "all"
+    raise ValueError("Use :mode first or :mode all")
+
+
+def run_interactive_loop(
+    *,
+    locate: Locate,
+    capture_screen: CaptureScreen,
+    move_pointer: MovePointer,
+    save_result: SaveResult,
+    input_fn: Input = input,
+    output_fn: Output = print,
+    pause_fn: Pause = time.sleep,
+) -> None:
+    mode: TargetMode = "first"
+    output_fn("Commands: :mode first, :mode all, exit")
+
+    while True:
+        try:
+            command = input_fn(f"[{mode}] Что найти? ").strip()
+        except (EOFError, KeyboardInterrupt):
+            output_fn("Stopped.")
+            return
+
+        normalized_command = command.casefold()
+        if not command:
+            continue
+        if normalized_command in _EXIT_COMMANDS:
+            return
+        if normalized_command.startswith(":mode"):
+            try:
+                mode = parse_mode_command(command)
+                output_fn(f"Mode: {mode}")
+            except ValueError as error:
+                output_fn(str(error))
+            continue
+
+        try:
+            screenshot = capture_screen()
+            detections = list(locate(screenshot, command))
+            save_result(screenshot, detections)
+
+            if not detections:
+                output_fn("Nothing found; pointer was not moved.")
+                continue
+
+            for index, detection in enumerate(detections, start=1):
+                center = box_center(detection.box, screenshot.size)
+                output_fn(
+                    f"{index}. {detection.label}: "
+                    f"box={detection.box}, center={center}"
+                )
+
+            targets = select_targets(detections, mode)
+            for index, detection in enumerate(targets):
+                move_pointer(*box_center(detection.box, screenshot.size))
+                if index < len(targets) - 1:
+                    pause_fn(0.35)
+        except Exception as error:
+            output_fn(f"Query failed: {error}")

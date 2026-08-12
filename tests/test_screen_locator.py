@@ -1,10 +1,20 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, call
+
+from PIL import Image
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from screen_locator import Detection, box_center, parse_detections, select_targets
+from screen_locator import (
+    Detection,
+    box_center,
+    parse_detections,
+    parse_mode_command,
+    run_interactive_loop,
+    select_targets,
+)
 
 
 class ParseDetectionsTests(unittest.TestCase):
@@ -123,6 +133,253 @@ class SelectTargetsTests(unittest.TestCase):
     def test_unknown_mode_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Unsupported target mode"):
             select_targets(self.detections, "nearest")  # type: ignore[arg-type]
+
+
+class ModeCommandTests(unittest.TestCase):
+    def test_valid_mode_commands_are_trimmed_and_case_insensitive(self):
+        cases = {
+            ":mode first": "first",
+            "  :MODE ALL  ": "all",
+        }
+
+        for command, expected in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual(parse_mode_command(command), expected)
+
+    def test_invalid_mode_command_is_rejected_with_guidance(self):
+        for command in (":mode nearest", ":mode", "mode all", ":mode all now"):
+            with self.subTest(command=command):
+                with self.assertRaisesRegex(
+                    ValueError, "Use :mode first or :mode all"
+                ):
+                    parse_mode_command(command)
+
+
+class InteractiveLoopTests(unittest.TestCase):
+    @staticmethod
+    def input_from(*values):
+        commands = iter(values)
+
+        def read_input(_prompt):
+            value = next(commands)
+            if isinstance(value, BaseException):
+                raise value
+            return value
+
+        return read_input
+
+    def test_each_query_uses_a_fresh_screenshot_and_matching_description(self):
+        first_image = Image.new("RGB", (100, 100))
+        second_image = Image.new("RGB", (200, 100))
+        capture = Mock(side_effect=[first_image, second_image])
+        locate = Mock(return_value=[])
+        save = Mock()
+
+        run_interactive_loop(
+            locate=locate,
+            capture_screen=capture,
+            move_pointer=Mock(),
+            save_result=save,
+            input_fn=self.input_from("first query", "second query", "exit"),
+            output_fn=Mock(),
+            pause_fn=Mock(),
+        )
+
+        self.assertEqual(capture.call_count, 2)
+        self.assertEqual(
+            locate.call_args_list,
+            [call(first_image, "first query"), call(second_image, "second query")],
+        )
+        self.assertEqual(
+            save.call_args_list,
+            [call(first_image, []), call(second_image, [])],
+        )
+
+    def test_default_mode_moves_only_to_first_clamped_center(self):
+        image = Image.new("RGB", (100, 80))
+        move = Mock()
+
+        run_interactive_loop(
+            locate=Mock(
+                return_value=[
+                    Detection("first", (-30, -20, -10, -4)),
+                    Detection("second", (40, 40, 60, 60)),
+                ]
+            ),
+            capture_screen=Mock(return_value=image),
+            move_pointer=move,
+            save_result=Mock(),
+            input_fn=self.input_from("button", "quit"),
+            output_fn=Mock(),
+            pause_fn=Mock(),
+        )
+
+        move.assert_called_once_with(0, 0)
+
+    def test_all_mode_moves_to_every_center_in_order_and_pauses_between(self):
+        image = Image.new("RGB", (100, 100))
+        move = Mock()
+        pause = Mock()
+        capture = Mock(return_value=image)
+
+        run_interactive_loop(
+            locate=Mock(
+                return_value=[
+                    Detection("first", (10, 10, 30, 30)),
+                    Detection("second", (40, 40, 60, 60)),
+                ]
+            ),
+            capture_screen=capture,
+            move_pointer=move,
+            save_result=Mock(),
+            input_fn=self.input_from(":MODE ALL", "buttons", "ExIt"),
+            output_fn=Mock(),
+            pause_fn=pause,
+        )
+
+        capture.assert_called_once_with()
+        self.assertEqual(move.call_args_list, [call(20, 20), call(50, 50)])
+        pause.assert_called_once_with(0.35)
+
+    def test_no_detections_saves_image_without_moving_pointer(self):
+        image = Image.new("RGB", (100, 100))
+        move = Mock()
+        save = Mock()
+        output = Mock()
+
+        run_interactive_loop(
+            locate=Mock(return_value=[]),
+            capture_screen=Mock(return_value=image),
+            move_pointer=move,
+            save_result=save,
+            input_fn=self.input_from("missing", "exit"),
+            output_fn=output,
+            pause_fn=Mock(),
+        )
+
+        save.assert_called_once_with(image, [])
+        move.assert_not_called()
+        self.assertTrue(
+            any("nothing" in str(message).lower() for message in output.call_args_list)
+        )
+
+    def test_empty_input_does_not_capture_screen(self):
+        capture = Mock()
+        output = Mock()
+        input_fn = Mock(side_effect=self.input_from("   ", "exit"))
+
+        run_interactive_loop(
+            locate=Mock(),
+            capture_screen=capture,
+            move_pointer=Mock(),
+            save_result=Mock(),
+            input_fn=input_fn,
+            output_fn=output,
+            pause_fn=Mock(),
+        )
+
+        capture.assert_not_called()
+        help_text = output.call_args_list[0].args[0]
+        self.assertIn(":mode first", help_text)
+        self.assertIn(":mode all", help_text)
+        self.assertIn("exit", help_text)
+        self.assertIn("Что найти?", input_fn.call_args_list[0].args[0])
+        self.assertIn("first", input_fn.call_args_list[0].args[0])
+
+    def test_prints_every_box_and_center_in_detection_order(self):
+        image = Image.new("RGB", (100, 100))
+        output = Mock()
+
+        run_interactive_loop(
+            locate=Mock(
+                return_value=[
+                    Detection("button", (10, 20, 30, 40)),
+                    Detection("icon", (50, 60, 90, 100)),
+                ]
+            ),
+            capture_screen=Mock(return_value=image),
+            move_pointer=Mock(),
+            save_result=Mock(),
+            input_fn=self.input_from("controls", "exit"),
+            output_fn=output,
+            pause_fn=Mock(),
+        )
+
+        detection_messages = [
+            message.args[0]
+            for message in output.call_args_list
+            if message.args[0][:1].isdigit()
+        ]
+        self.assertEqual(
+            detection_messages,
+            [
+                "1. button: box=(10, 20, 30, 40), center=(20, 30)",
+                "2. icon: box=(50, 60, 90, 100), center=(70, 80)",
+            ],
+        )
+
+    def test_invalid_mode_command_keeps_default_first_mode(self):
+        image = Image.new("RGB", (100, 100))
+        move = Mock()
+        output = Mock()
+
+        run_interactive_loop(
+            locate=Mock(
+                return_value=[
+                    Detection("first", (10, 10, 30, 30)),
+                    Detection("second", (40, 40, 60, 60)),
+                ]
+            ),
+            capture_screen=Mock(return_value=image),
+            move_pointer=move,
+            save_result=Mock(),
+            input_fn=self.input_from(":mode nearest", "buttons", "exit"),
+            output_fn=output,
+            pause_fn=Mock(),
+        )
+
+        move.assert_called_once_with(20, 20)
+        output.assert_any_call("Use :mode first or :mode all")
+
+    def test_keyboard_interrupt_reports_stopped_without_capturing(self):
+        capture = Mock()
+        output = Mock()
+
+        run_interactive_loop(
+            locate=Mock(),
+            capture_screen=capture,
+            move_pointer=Mock(),
+            save_result=Mock(),
+            input_fn=self.input_from(KeyboardInterrupt()),
+            output_fn=output,
+            pause_fn=Mock(),
+        )
+
+        capture.assert_not_called()
+        output.assert_any_call("Stopped.")
+
+    def test_query_failure_is_reported_and_following_query_still_runs(self):
+        first_image = Image.new("RGB", (100, 100))
+        second_image = Image.new("RGB", (200, 100))
+        detection = Detection("recovered", (20, 30, 60, 70))
+        locate = Mock(side_effect=[RuntimeError("model unavailable"), [detection]])
+        save = Mock()
+        move = Mock()
+        output = Mock()
+
+        run_interactive_loop(
+            locate=locate,
+            capture_screen=Mock(side_effect=[first_image, second_image]),
+            move_pointer=move,
+            save_result=save,
+            input_fn=self.input_from("first", "second", "exit"),
+            output_fn=output,
+            pause_fn=Mock(),
+        )
+
+        output.assert_any_call("Query failed: model unavailable")
+        save.assert_called_once_with(second_image, [detection])
+        move.assert_called_once_with(40, 50)
 
 
 if __name__ == "__main__":
