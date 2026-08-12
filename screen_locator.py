@@ -17,12 +17,11 @@ class Detection:
     box: Box
 
 
-_GROUP_PATTERN = re.compile(
-    r"(?:<ref>(?P<label>.*?)</ref>\s*)?"
-    r"(?P<boxes>(?:<box>.*?</box>\s*)+)",
+_TOKEN_PATTERN = re.compile(
+    r"<ref>(?P<label>(?:(?!<ref>|<box>).)*?)</ref>"
+    r"|(?P<box><box>(?:(?!<ref>|<box>).)*?</box>)",
     re.DOTALL,
 )
-_BOX_BLOCK_PATTERN = re.compile(r"<box>.*?</box>", re.DOTALL)
 _BOX_PATTERN = re.compile(
     r"<box>\s*"
     r"<\s*([+-]?\d+)\s*>\s*"
@@ -35,26 +34,28 @@ _BOX_PATTERN = re.compile(
 
 def parse_detections(model_output: str, image_size: tuple[int, int]) -> list[Detection]:
     detections: list[Detection] = []
+    detection_label = "object"
 
-    for group_match in _GROUP_PATTERN.finditer(model_output):
-        label = group_match.group("label")
-        detection_label = label if label is not None else "object"
+    for token_match in _TOKEN_PATTERN.finditer(model_output):
+        raw_label = token_match.group("label")
+        if raw_label is not None:
+            detection_label = (raw_label or "").strip() or "object"
+            continue
 
-        for box_match in _BOX_BLOCK_PATTERN.finditer(group_match.group("boxes")):
-            coordinate_match = _BOX_PATTERN.fullmatch(box_match.group())
-            if coordinate_match is None:
-                continue
+        coordinate_match = _BOX_PATTERN.fullmatch(token_match.group("box"))
+        if coordinate_match is None:
+            continue
 
-            normalized_box = tuple(int(value) for value in coordinate_match.groups())
-            x1, y1, x2, y2 = image_optimization.scale_normalized_box(
-                normalized_box, image_size
+        normalized_box = tuple(int(value) for value in coordinate_match.groups())
+        x1, y1, x2, y2 = image_optimization.scale_normalized_box(
+            normalized_box, image_size
+        )
+        detections.append(
+            Detection(
+                label=detection_label,
+                box=(round(x1), round(y1), round(x2), round(y2)),
             )
-            detections.append(
-                Detection(
-                    label=detection_label,
-                    box=(round(x1), round(y1), round(x2), round(y2)),
-                )
-            )
+        )
 
     return detections
 

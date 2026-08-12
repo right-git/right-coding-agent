@@ -50,6 +50,52 @@ class ParseDetectionsTests(unittest.TestCase):
             [Detection(label="targets", box=(-10, 20, 300, 400))],
         )
 
+    def test_valid_box_after_unterminated_box_is_recovered(self):
+        detections = parse_detections(
+            "<box><10><20><30>"
+            "<box><100><200><300><400></box>",
+            (1000, 1000),
+        )
+
+        self.assertEqual(
+            detections,
+            [Detection(label="object", box=(100, 200, 300, 400))],
+        )
+
+    def test_labeled_box_after_unterminated_box_is_recovered(self):
+        detections = parse_detections(
+            "<box><10><20><30>"
+            "<ref>good</ref><box><100><200><300><400></box>",
+            (1000, 1000),
+        )
+
+        self.assertEqual(
+            detections,
+            [Detection(label="good", box=(100, 200, 300, 400))],
+        )
+
+    def test_reference_labels_are_stripped(self):
+        detections = parse_detections(
+            "<ref>  submit button  </ref><box><100><200><300><400></box>",
+            (1000, 1000),
+        )
+
+        self.assertEqual(
+            detections,
+            [Detection(label="submit button", box=(100, 200, 300, 400))],
+        )
+
+    def test_empty_reference_label_uses_object(self):
+        detections = parse_detections(
+            "<ref></ref><box><100><200><300><400></box>",
+            (1000, 1000),
+        )
+
+        self.assertEqual(
+            detections,
+            [Detection(label="object", box=(100, 200, 300, 400))],
+        )
+
 
 class BoxCenterTests(unittest.TestCase):
     def test_midpoint_is_returned_as_integer_coordinates(self):
