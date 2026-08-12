@@ -1,7 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, call
+from unittest.mock import Mock, call, patch
 
 from PIL import Image
 
@@ -10,11 +10,69 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from screen_locator import (
     Detection,
     box_center,
+    capture_primary_screen,
+    enable_dpi_awareness,
+    move_pointer,
     parse_detections,
     parse_mode_command,
     run_interactive_loop,
     select_targets,
 )
+
+
+class ScreenAndPointerAdapterTests(unittest.TestCase):
+    def test_capture_primary_screen_requests_primary_screen_and_returns_rgb(self):
+        source = Image.new("RGBA", (123, 45), (10, 20, 30, 40))
+        grabber = Mock(return_value=source)
+
+        screenshot = capture_primary_screen(grabber=grabber)
+
+        grabber.assert_called_once_with(all_screens=False)
+        self.assertEqual(screenshot.mode, "RGB")
+        self.assertEqual(screenshot.size, source.size)
+
+    def test_move_pointer_uses_injected_setter_with_integer_coordinates(self):
+        setter = Mock(return_value=True)
+
+        move_pointer(12.9, 34.1, set_cursor_position=setter)
+
+        setter.assert_called_once_with(12, 34)
+
+    def test_move_pointer_raises_when_setter_reports_failure(self):
+        setter = Mock(return_value=False)
+
+        with self.assertRaisesRegex(OSError, "^SetCursorPos failed$"):
+            move_pointer(12, 34, set_cursor_position=setter)
+
+    def test_enable_dpi_awareness_prefers_shcore(self):
+        libraries = Mock()
+
+        enable_dpi_awareness(platform="win32", libraries=libraries)
+
+        libraries.shcore.SetProcessDpiAwareness.assert_called_once_with(2)
+        libraries.user32.SetProcessDPIAware.assert_not_called()
+
+    def test_enable_dpi_awareness_falls_back_when_shcore_is_unavailable(self):
+        for error in (AttributeError("missing"), OSError("unavailable")):
+            with self.subTest(error=type(error).__name__):
+                libraries = Mock()
+                libraries.shcore.SetProcessDpiAwareness.side_effect = error
+
+                enable_dpi_awareness(platform="win32", libraries=libraries)
+
+                libraries.user32.SetProcessDPIAware.assert_called_once_with()
+
+    def test_enable_dpi_awareness_is_a_non_windows_no_op(self):
+        libraries = Mock(spec=[])
+
+        enable_dpi_awareness(platform="linux", libraries=libraries)
+
+        self.assertEqual(libraries.mock_calls, [])
+
+    def test_default_move_pointer_requires_windows(self):
+        with patch("screen_locator.sys.platform", "linux"):
+            with self.assertRaisesRegex(RuntimeError, "requires Windows"):
+                move_pointer(12, 34)
 
 
 class ParseDetectionsTests(unittest.TestCase):

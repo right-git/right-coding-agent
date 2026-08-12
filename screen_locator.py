@@ -1,11 +1,13 @@
+import ctypes
 import re
+import sys
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import image_optimization
-from PIL import Image
+from PIL import Image, ImageGrab
 
 
 TargetMode = Literal["first", "all"]
@@ -32,6 +34,40 @@ _BOX_PATTERN = re.compile(
     r"<\s*([+-]?\d+)\s*>\s*"
     r"</box>"
 )
+
+
+def enable_dpi_awareness(
+    *, platform: str = sys.platform, libraries: Any | None = None
+) -> None:
+    if platform != "win32":
+        return
+
+    windows_libraries = libraries if libraries is not None else ctypes.windll
+    try:
+        windows_libraries.shcore.SetProcessDpiAwareness(2)
+    except (AttributeError, OSError):
+        windows_libraries.user32.SetProcessDPIAware()
+
+
+def capture_primary_screen(
+    *, grabber: Callable[..., Image.Image] = ImageGrab.grab
+) -> Image.Image:
+    return grabber(all_screens=False).convert("RGB")
+
+
+def move_pointer(
+    x: int,
+    y: int,
+    *,
+    set_cursor_position: Callable[[int, int], Any] | None = None,
+) -> None:
+    if set_cursor_position is None:
+        if sys.platform != "win32":
+            raise RuntimeError("move_pointer requires Windows")
+        set_cursor_position = ctypes.windll.user32.SetCursorPos
+
+    if not set_cursor_position(int(x), int(y)):
+        raise OSError("SetCursorPos failed")
 
 
 def parse_detections(model_output: str, image_size: tuple[int, int]) -> list[Detection]:
