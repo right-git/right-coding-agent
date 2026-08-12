@@ -131,7 +131,7 @@ def run_interactive_loop(
             continue
         if normalized_command in _EXIT_COMMANDS:
             return
-        if normalized_command.startswith(":mode"):
+        if normalized_command.split(maxsplit=1)[0] == ":mode":
             try:
                 mode = parse_mode_command(command)
                 output_fn(f"Mode: {mode}")
@@ -160,5 +160,8 @@ def run_interactive_loop(
                 move_pointer(*box_center(detection.box, screenshot.size))
                 if index < len(targets) - 1:
                     pause_fn(0.35)
+        except KeyboardInterrupt:
+            output_fn("Stopped.")
+            return
         except Exception as error:
             output_fn(f"Query failed: {error}")

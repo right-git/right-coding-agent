@@ -259,9 +259,7 @@ class InteractiveLoopTests(unittest.TestCase):
 
         save.assert_called_once_with(image, [])
         move.assert_not_called()
-        self.assertTrue(
-            any("nothing" in str(message).lower() for message in output.call_args_list)
-        )
+        output.assert_any_call("Nothing found; pointer was not moved.")
 
     def test_empty_input_does_not_capture_screen(self):
         capture = Mock()
@@ -341,6 +339,51 @@ class InteractiveLoopTests(unittest.TestCase):
         move.assert_called_once_with(20, 20)
         output.assert_any_call("Use :mode first or :mode all")
 
+    def test_invalid_mode_command_preserves_selected_all_mode(self):
+        image = Image.new("RGB", (100, 100))
+        move = Mock()
+        pause = Mock()
+        output = Mock()
+
+        run_interactive_loop(
+            locate=Mock(
+                return_value=[
+                    Detection("first", (10, 10, 30, 30)),
+                    Detection("second", (40, 40, 60, 60)),
+                ]
+            ),
+            capture_screen=Mock(return_value=image),
+            move_pointer=move,
+            save_result=Mock(),
+            input_fn=self.input_from(
+                ":mode all", ":mode nearest", "buttons", "exit"
+            ),
+            output_fn=output,
+            pause_fn=pause,
+        )
+
+        output.assert_any_call("Use :mode first or :mode all")
+        self.assertEqual(move.call_args_list, [call(20, 20), call(50, 50)])
+        pause.assert_called_once_with(0.35)
+
+    def test_mode_near_prefix_is_treated_as_an_ordinary_query(self):
+        image = Image.new("RGB", (100, 100))
+        locate = Mock(return_value=[])
+        save = Mock()
+
+        run_interactive_loop(
+            locate=locate,
+            capture_screen=Mock(return_value=image),
+            move_pointer=Mock(),
+            save_result=save,
+            input_fn=self.input_from(":model button", "exit"),
+            output_fn=Mock(),
+            pause_fn=Mock(),
+        )
+
+        locate.assert_called_once_with(image, ":model button")
+        save.assert_called_once_with(image, [])
+
     def test_keyboard_interrupt_reports_stopped_without_capturing(self):
         capture = Mock()
         output = Mock()
@@ -357,6 +400,27 @@ class InteractiveLoopTests(unittest.TestCase):
 
         capture.assert_not_called()
         output.assert_any_call("Stopped.")
+
+    def test_keyboard_interrupt_during_query_reports_stopped_and_returns(self):
+        image = Image.new("RGB", (100, 100))
+        output = Mock()
+        save = Mock()
+
+        try:
+            run_interactive_loop(
+                locate=Mock(side_effect=KeyboardInterrupt),
+                capture_screen=Mock(return_value=image),
+                move_pointer=Mock(),
+                save_result=save,
+                input_fn=self.input_from("button"),
+                output_fn=output,
+                pause_fn=Mock(),
+            )
+        except KeyboardInterrupt:
+            self.fail("query-stage KeyboardInterrupt must stop the loop cleanly")
+
+        output.assert_any_call("Stopped.")
+        save.assert_not_called()
 
     def test_query_failure_is_reported_and_following_query_still_runs(self):
         first_image = Image.new("RGB", (100, 100))
