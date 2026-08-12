@@ -21,7 +21,7 @@ from screen_locator import (
 
 
 class ScreenAndPointerAdapterTests(unittest.TestCase):
-    def test_capture_primary_screen_requests_primary_screen_and_returns_rgb(self):
+    def test_capture_primary_screen_converts_non_rgb_image(self):
         source = Image.new("RGBA", (123, 45), (10, 20, 30, 40))
         grabber = Mock(return_value=source)
 
@@ -31,7 +31,23 @@ class ScreenAndPointerAdapterTests(unittest.TestCase):
         self.assertEqual(screenshot.mode, "RGB")
         self.assertEqual(screenshot.size, source.size)
 
+    def test_capture_primary_screen_returns_existing_rgb_image_unchanged(self):
+        source = Image.new("RGB", (123, 45), (10, 20, 30))
+        grabber = Mock(return_value=source)
+
+        screenshot = capture_primary_screen(grabber=grabber)
+
+        grabber.assert_called_once_with(all_screens=False)
+        self.assertIs(screenshot, source)
+
     def test_move_pointer_uses_injected_setter_with_integer_coordinates(self):
+        setter = Mock(return_value=True)
+
+        move_pointer(12, 34, set_cursor_position=setter)
+
+        setter.assert_called_once_with(12, 34)
+
+    def test_move_pointer_casts_coordinates_to_integers(self):
         setter = Mock(return_value=True)
 
         move_pointer(12.9, 34.1, set_cursor_position=setter)
@@ -46,6 +62,7 @@ class ScreenAndPointerAdapterTests(unittest.TestCase):
 
     def test_enable_dpi_awareness_prefers_shcore(self):
         libraries = Mock()
+        libraries.shcore.SetProcessDpiAwareness.return_value = 0
 
         enable_dpi_awareness(platform="win32", libraries=libraries)
 
@@ -57,10 +74,40 @@ class ScreenAndPointerAdapterTests(unittest.TestCase):
             with self.subTest(error=type(error).__name__):
                 libraries = Mock()
                 libraries.shcore.SetProcessDpiAwareness.side_effect = error
+                libraries.user32.SetProcessDPIAware.return_value = True
 
                 enable_dpi_awareness(platform="win32", libraries=libraries)
 
                 libraries.user32.SetProcessDPIAware.assert_called_once_with()
+
+    def test_enable_dpi_awareness_falls_back_for_failed_hresult(self):
+        for failed_hresult in (0x80004005, -2147467259):
+            with self.subTest(failed_hresult=failed_hresult):
+                libraries = Mock()
+                libraries.shcore.SetProcessDpiAwareness.return_value = failed_hresult
+                libraries.user32.SetProcessDPIAware.return_value = True
+
+                enable_dpi_awareness(platform="win32", libraries=libraries)
+
+                libraries.user32.SetProcessDPIAware.assert_called_once_with()
+
+    def test_enable_dpi_awareness_raises_when_legacy_fallback_fails(self):
+        libraries = Mock()
+        libraries.shcore.SetProcessDpiAwareness.return_value = 0x80004005
+        libraries.user32.SetProcessDPIAware.return_value = False
+
+        with self.assertRaisesRegex(OSError, "SetProcessDPIAware failed"):
+            enable_dpi_awareness(platform="win32", libraries=libraries)
+
+    def test_enable_dpi_awareness_treats_access_denied_as_already_configured(self):
+        for access_denied in (0x80070005, -2147024891):
+            with self.subTest(access_denied=access_denied):
+                libraries = Mock()
+                libraries.shcore.SetProcessDpiAwareness.return_value = access_denied
+
+                enable_dpi_awareness(platform="win32", libraries=libraries)
+
+                libraries.user32.SetProcessDPIAware.assert_not_called()
 
     def test_enable_dpi_awareness_is_a_non_windows_no_op(self):
         libraries = Mock(spec=[])

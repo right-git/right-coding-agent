@@ -44,27 +44,55 @@ def enable_dpi_awareness(
 
     windows_libraries = libraries if libraries is not None else ctypes.windll
     try:
-        windows_libraries.shcore.SetProcessDpiAwareness(2)
+        set_process_dpi_awareness = (
+            windows_libraries.shcore.SetProcessDpiAwareness
+        )
+        if libraries is None:
+            set_process_dpi_awareness.argtypes = [ctypes.c_int]
+            set_process_dpi_awareness.restype = ctypes.c_long
+        hresult = set_process_dpi_awareness(2)
     except (AttributeError, OSError):
-        windows_libraries.user32.SetProcessDPIAware()
+        should_fall_back = True
+    else:
+        signed_hresult = ctypes.c_int32(hresult).value
+        # E_ACCESSDENIED means DPI awareness was already configured elsewhere.
+        if signed_hresult == ctypes.c_int32(0x80070005).value:
+            return
+        should_fall_back = signed_hresult < 0
+
+    if not should_fall_back:
+        return
+
+    set_process_dpi_aware = windows_libraries.user32.SetProcessDPIAware
+    if libraries is None:
+        set_process_dpi_aware.argtypes = []
+        set_process_dpi_aware.restype = ctypes.c_int
+    if not set_process_dpi_aware():
+        raise OSError("SetProcessDPIAware failed")
 
 
 def capture_primary_screen(
     *, grabber: Callable[..., Image.Image] = ImageGrab.grab
 ) -> Image.Image:
-    return grabber(all_screens=False).convert("RGB")
+    screenshot = grabber(all_screens=False)
+    if screenshot.mode == "RGB":
+        return screenshot
+    return screenshot.convert("RGB")
 
 
 def move_pointer(
     x: int,
     y: int,
     *,
-    set_cursor_position: Callable[[int, int], Any] | None = None,
+    set_cursor_position: Callable[[int, int], int | bool] | None = None,
 ) -> None:
     if set_cursor_position is None:
         if sys.platform != "win32":
             raise RuntimeError("move_pointer requires Windows")
-        set_cursor_position = ctypes.windll.user32.SetCursorPos
+        native_set_cursor_position = ctypes.windll.user32.SetCursorPos
+        native_set_cursor_position.argtypes = [ctypes.c_int, ctypes.c_int]
+        native_set_cursor_position.restype = ctypes.c_int
+        set_cursor_position = native_set_cursor_position
 
     if not set_cursor_position(int(x), int(y)):
         raise OSError("SetCursorPos failed")
