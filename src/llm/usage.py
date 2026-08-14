@@ -107,21 +107,39 @@ class SessionUsage:
         self.cost = 0.0
         self.turns = 0
         self.unpriced_turns = 0
+        self.duration = 0.0
 
     @property
     def total_tokens(self) -> int:
         return self.input_tokens + self.output_tokens
 
-    def add(self, turn: TurnUsage, cost: float | None) -> None:
+    def add(
+        self, turn: TurnUsage, cost: float | None, duration: float = 0.0
+    ) -> None:
         if turn.calls == 0:
             return
         self.turns += 1
         self.input_tokens += turn.input_tokens
         self.output_tokens += turn.output_tokens
+        self.duration += max(0.0, duration)
         if cost is None:
             self.unpriced_turns += 1
         else:
             self.cost += cost
+
+
+def format_duration(seconds: float) -> str:
+    """Wall-clock spans the way people read them, from 0.8s to 1h 05m."""
+    seconds = max(0.0, seconds)
+    if seconds < 10:
+        return f"{seconds:.1f}s"
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    minutes, secs = divmod(int(round(seconds)), 60)
+    if minutes < 60:
+        return f"{minutes}m {secs:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m"
 
 
 def format_money(amount: float) -> str:

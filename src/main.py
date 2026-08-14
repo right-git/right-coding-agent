@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from src.config.base import settings
@@ -47,8 +48,9 @@ async def report_usage(
     model: str,
     response_messages,
     previous_ids: frozenset[str],
+    duration: float | None = None,
 ) -> None:
-    """Print the context/token/cost footer for one finished turn.
+    """Print the context/token/cost/time footer for one finished turn.
 
     Reporting must never break a turn that already succeeded, so every
     failure here is logged and swallowed.
@@ -63,16 +65,17 @@ async def report_usage(
             if model_info is not None and turn.calls
             else None
         )
-        session_usage.add(turn, cost)
-        ui.print_usage(turn, model_info, cost, session_usage)
+        session_usage.add(turn, cost, duration or 0.0)
+        ui.print_usage(turn, model_info, cost, session_usage, duration)
         logger.info(
             "Turn usage model [{}] input [{}] output [{}] context [{}] "
-            "cost [{}] session_tokens [{}]",
+            "cost [{}] duration [{}] session_tokens [{}]",
             model,
             turn.input_tokens,
             turn.output_tokens,
             turn.context_tokens,
             cost,
+            duration,
             session_usage.total_tokens,
         )
     except Exception:
@@ -89,6 +92,7 @@ async def process_user_turn(
     catalog: OpenRouterCatalog | None = None,
     session_usage: SessionUsage | None = None,
 ) -> list[HumanMessage | AIMessage | ToolMessage]:
+    started = time.perf_counter()
     base_messages = trim_incomplete_tool_calls(messages)
     working_messages = [*base_messages, HumanMessage(user_content)]
     shown_count = len(working_messages)
@@ -175,6 +179,7 @@ async def process_user_turn(
                 model=model,
                 response_messages=raw_messages,
                 previous_ids=previous_ids,
+                duration=time.perf_counter() - started,
             )
             return trimmed_messages
 
@@ -186,6 +191,7 @@ async def process_user_turn(
             model=model,
             response_messages=raw_messages,
             previous_ids=previous_ids,
+            duration=time.perf_counter() - started,
         )
         return trimmed_messages
     except Exception as e:

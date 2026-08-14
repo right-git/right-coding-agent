@@ -44,13 +44,15 @@ the production agent, then compare the usage footers — see
 After every response a dim footer reports what the turn cost:
 
 ```
-ctx █░░░░░░░░░░░░░░░░░░░ 14,204/1,048,576 (1.4%) · turn 13,900 in + 304 out ($0.0058) · tools 2 (+5 in scripts) · session 28,400 tokens ($0.0116)
+ctx █░░░░░░░░░░░░░░░░░░░ 14,204/1,048,576 (1.4%) · turn 13,900 in + 304 out ($0.0058) · took 26s · tools 2 (+5 in scripts) · session 28,400 tokens ($0.0116, 1m 12s)
 ```
 
 The context bar is colored by fill: green below 70%, yellow below 90%, red
-above. `tools` counts the model's direct tool calls this turn, plus the
-registry tools its `run_tools` scripts invoked internally; the segment is
-omitted on turns that called no tools.
+above. `took` is the wall-clock time this turn spent processing (model calls,
+tools, everything); the session parenthesis accumulates it. `tools` counts
+the model's direct tool calls this turn, plus the registry tools its
+`run_tools` scripts invoked internally; the segment is omitted on turns that
+called no tools.
 
 That is: how full the current model's context window is, tokens and dollars
 for this turn, and session totals. Token counts come from the provider's

@@ -17,7 +17,7 @@ from rich.theme import Theme
 from src.config.logging import app_logging
 from src.llm.log_middleware import scrub_text
 from src.llm.openrouter import ModelInfo
-from src.llm.usage import SessionUsage, TurnUsage, format_money
+from src.llm.usage import SessionUsage, TurnUsage, format_duration, format_money
 
 theme = Theme({
     "user.prompt": "bold cyan",
@@ -408,6 +408,7 @@ class ChatUI:
         model_info: ModelInfo | None,
         cost: float | None,
         session: SessionUsage,
+        duration: float | None = None,
     ) -> None:
         """One dim footer line: context fill, turn tokens and cost, session totals."""
         if turn.calls == 0:
@@ -433,6 +434,9 @@ class ChatUI:
 
         parts = [context_part, turn_part]
 
+        if duration is not None and duration > 0:
+            parts.append(f"took {format_duration(duration)}")
+
         if turn.tool_calls or turn.script_tool_calls:
             tools_part = f"tools {turn.tool_calls}"
             if turn.script_tool_calls:
@@ -441,7 +445,10 @@ class ChatUI:
 
         session_part = f"session {session.total_tokens:,} tokens"
         approx = "≈" if session.unpriced_turns else ""
-        session_part += f" ({approx}{format_money(session.cost)})"
+        details = f"{approx}{format_money(session.cost)}"
+        if session.duration > 0:
+            details += f", {format_duration(session.duration)}"
+        session_part += f" ({details})"
         parts.append(session_part)
 
         self.console.print("  " + " · ".join(parts), style="info")

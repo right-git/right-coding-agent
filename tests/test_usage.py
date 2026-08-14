@@ -6,6 +6,7 @@ from src.llm.usage import (
     SessionUsage,
     TurnUsage,
     collect_message_ids,
+    format_duration,
     format_money,
     turn_usage_from_messages,
 )
@@ -135,10 +136,28 @@ class SessionUsageTests(unittest.TestCase):
     def test_empty_turns_are_ignored(self):
         session = SessionUsage()
 
-        session.add(TurnUsage(), None)
+        session.add(TurnUsage(), None, 100.0)
 
         self.assertEqual(session.turns, 0)
         self.assertEqual(session.unpriced_turns, 0)
+        self.assertEqual(session.duration, 0.0)
+
+    def test_accumulates_processing_time(self):
+        session = SessionUsage()
+
+        session.add(TurnUsage(100, 10, 110, calls=1), 0.001, 2.5)
+        session.add(TurnUsage(100, 10, 110, calls=1), 0.001, 3.0)
+
+        self.assertAlmostEqual(session.duration, 5.5)
+
+
+class FormatDurationTests(unittest.TestCase):
+    def test_scales_units_with_length(self):
+        self.assertEqual(format_duration(0.83), "0.8s")
+        self.assertEqual(format_duration(12.4), "12s")
+        self.assertEqual(format_duration(125), "2m 05s")
+        self.assertEqual(format_duration(3712), "1h 01m")
+        self.assertEqual(format_duration(-5), "0.0s")
 
 
 class FormatMoneyTests(unittest.TestCase):

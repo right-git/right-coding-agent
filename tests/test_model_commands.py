@@ -121,16 +121,29 @@ class UsageFooterTests(unittest.TestCase):
             tool_calls=2,
             script_tool_calls=5,
         )
-        session.add(turn, 0.0012)
+        session.add(turn, 0.0012, 12.4)
 
-        ui.print_usage(turn, GEMINI, 0.0012, session)
+        ui.print_usage(turn, GEMINI, 0.0012, session, 12.4)
 
         rendered = ui.console.export_text()
         self.assertIn("14,204/1,048,576 (1.4%)", rendered)
         self.assertIn("█" + "░" * 19, rendered)
         self.assertIn("turn 13,900 in + 304 out ($0.0012)", rendered)
+        self.assertIn("took 12s", rendered)
         self.assertIn("tools 2 (+5 in scripts)", rendered)
-        self.assertIn("session 14,204 tokens ($0.0012)", rendered)
+        self.assertIn("session 14,204 tokens ($0.0012, 12s)", rendered)
+
+    def test_footer_omits_time_when_duration_is_unknown(self):
+        ui = make_ui()
+        session = SessionUsage()
+        turn = TurnUsage(
+            input_tokens=100, output_tokens=10, context_tokens=110, calls=1
+        )
+        session.add(turn, 0.001)
+
+        ui.print_usage(turn, GEMINI, 0.001, session)
+
+        self.assertNotIn("took", ui.console.export_text())
 
     def test_footer_omits_the_tools_segment_when_none_were_called(self):
         ui = make_ui()

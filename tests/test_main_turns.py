@@ -275,7 +275,11 @@ class UsageReportingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         ui.print_usage.assert_called_once()
-        turn, model_info, cost, session_arg = ui.print_usage.call_args.args
+        turn, model_info, cost, session_arg, duration = (
+            ui.print_usage.call_args.args
+        )
+        self.assertGreaterEqual(duration, 0)
+        self.assertAlmostEqual(session.duration, duration)
         self.assertEqual(turn.input_tokens, 230)
         self.assertEqual(turn.output_tokens, 50)
         self.assertEqual(turn.context_tokens, 160)
