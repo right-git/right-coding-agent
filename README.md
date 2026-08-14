@@ -6,6 +6,7 @@
 
 - Multi-provider LLM client with retry/failover logic, Azure OpenAI support, and structured output via LangChain.
 - Built-in agent and tools: `Agents` adds system prompts, `LLMClient` manages model/tool initialization, and `src/llm/tools.py` contains `@tool`-decorated functions.
+- Scripted tool orchestration: the agent sees only three meta tools (`search_tools`, `get_tool`, `run_tools`) and drives every other tool from a sandboxed Python-subset script — flat context cost, parallel calls, and token-free polling (see below).
 - The `WebParser` tool (`src/tools/web_parser/`) fetches web pages over HTTP, parses them with BeautifulSoup, and converts to Markdown.
 - The `ComputerUse` tool (`src/tools/computer_use/`) gives the agent eyes and hands on the desktop: it finds on-screen elements from a plain-language description, drives the mouse and keyboard, and can point at an element with an on-screen tooltip instead of clicking it.
 
@@ -26,6 +27,25 @@
    uv run python -m src.main
    ```
 
+## Chat commands and usage footer
+
+- `/models` — list models with their context window and $/M pricing (metadata from the public OpenRouter API);
+- `/model <name>` — switch models: exact or partial match over the curated list **and** the whole OpenRouter catalog, so any OpenRouter model id works;
+- `/log-level [name]`, `/clear`, `/help`, `/quit`.
+
+After every response a dim footer reports what the turn cost:
+
+```
+ctx 14,204/1,048,576 (1.4%) · turn 13,900 in + 304 out ($0.0058) · session 28,400 tokens ($0.0116)
+```
+
+That is: how full the current model's context window is, tokens and dollars
+for this turn, and session totals. Token counts come from the provider's
+`usage_metadata`; context length and per-token prices come from OpenRouter
+(fetched once in the background at startup, cached for the session, and the
+footer degrades gracefully — `limit unknown` / `price unknown` — when the
+catalog is unavailable).
+
 ## Project Structure
 
 - `src/main.py` — entry point; configures `Agents` with the model provider and starts the REPL interface.
@@ -35,11 +55,39 @@
   - `base.py` manages the LLM client;
   - `agents.py` implements specific agents (such as `right_coding_agent()`);
   - `tools.py` — utility LangChain tools;
-  - `computer_tools.py` — `screen_*` LangChain tools wrapping `ComputerUse`.
+  - `computer_tools.py` — `screen_*` LangChain tools wrapping `ComputerUse`;
+  - `meta_tools.py` — the tool registry and the `search_tools` / `get_tool` / `run_tools` meta tools.
 - `src/tools/web_parser/` — standalone HTTP client and HTML-to-Markdown parser.
 - `src/tools/computer_use/` — screen understanding and desktop control (see below).
 - `test.py` — interactive screen-locator REPL built on `ComputerUse`.
 - Tests are located in `tests/`.
+
+## Tool orchestration
+
+Exposing every tool schema to the model bloats the context and forces one
+round-trip per call. Instead, only three meta tools are wired into the agent
+(`src/llm/meta_tools.py`):
+
+1. `search_tools("click button screen")` — keyword search over the tool
+   registry (currently `web_search` plus the `screen_*` tools);
+2. `get_tool("screen_click")` — the full contract of one tool;
+3. `run_tools(code)` — a Python-subset script, executed server-side by the
+   sandboxed interpreter in `src/tools/base.py`, where registered tools are
+   called by bare name:
+
+   ```python
+   status = job_status("j1")
+   while status == "running":
+       sleep(5)                # token-free polling
+       status = job_status("j1")
+   pages = parallel(web_search("https://a"), web_search("https://b"))
+   return [page[:200] for page in pages]
+   ```
+
+The interpreter whitelists AST nodes, builtins, and methods (no imports, no
+dunder access), enforces op/sleep/wall-clock/memory budgets, and returns
+`{result, logs, error}` to the model. Intermediate tool output stays inside
+the script; only what it `return`s or `print`s reaches the conversation.
 
 ## Computer use
 
@@ -122,7 +170,7 @@ Commands: `:mode first`, `:mode all`, `:mark <описание> | <подска�
 ## Extension
 
 - **New agent:** Add a method to `src/llm/agents.py` that calls `self.ask_agent()` with a custom system prompt, tool list, and model.
-- **New tool:** Define a `@tool`-decorated async function in `src/llm/tools.py`, and connect any logic from `src/tools/`.
+- **New tool:** Define a `@tool`-decorated async function in `src/llm/tools.py`, connect any logic from `src/tools/`, and register it in the default registry (`get_registry()` in `src/llm/meta_tools.py`) so the agent can discover it via `search_tools` and call it from `run_tools` scripts.
 
 ## Development
 

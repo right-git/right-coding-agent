@@ -11,9 +11,12 @@ class MainStartupTests(unittest.IsolatedAsyncioTestCase):
         ui.get_input = AsyncMock(return_value="/quit")
         ui.handle_command = Mock(side_effect=SystemExit(0))
 
+        catalog = Mock()
+        catalog.models = AsyncMock(return_value={})
+
         with patch("src.main.ChatUI", return_value=ui), patch(
-            "src.llm.agents.Agents"
-        ) as agents_cls:
+            "src.main.OpenRouterCatalog", return_value=catalog
+        ), patch("src.llm.agents.Agents") as agents_cls:
             agents_cls.return_value = Mock()
 
             with self.assertRaises(SystemExit):

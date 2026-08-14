@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from langchain_core.messages import AIMessage, HumanMessage
 
+from src.llm.openrouter import ModelInfo
+from src.llm.usage import SessionUsage
 from src.main import process_user_turn
 
 
@@ -94,3 +96,102 @@ class ProcessUserTurnTests(unittest.IsolatedAsyncioTestCase):
         ui.print_response.assert_called_once_with([AIMessage(content="done")])
         ui.print_warning.assert_not_called()
         ui.print_error.assert_not_called()
+
+
+class UsageReportingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_turn_reports_usage_with_openrouter_pricing(self):
+        history = [
+            AIMessage(
+                content="old",
+                id="prev",
+                usage_metadata={
+                    "input_tokens": 10,
+                    "output_tokens": 2,
+                    "total_tokens": 12,
+                },
+            )
+        ]
+        response_messages = [
+            *history,
+            HumanMessage("test"),
+            AIMessage(
+                content="step",
+                id="new_1",
+                usage_metadata={
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "total_tokens": 120,
+                },
+            ),
+            AIMessage(
+                content="done",
+                id="new_2",
+                usage_metadata={
+                    "input_tokens": 130,
+                    "output_tokens": 30,
+                    "total_tokens": 160,
+                },
+            ),
+        ]
+        agents = Mock()
+        agents.right_coding_agent = AsyncMock(
+            return_value={"messages": response_messages}
+        )
+
+        ui = Mock()
+        ui.loading.return_value = nullcontext()
+        ui.has_visible_output.return_value = True
+
+        info = ModelInfo(
+            id="google/gemini-3.7-flash",
+            name="Gemini",
+            context_length=1_048_576,
+            prompt_price=7.5e-8,
+            completion_price=3e-7,
+        )
+        catalog = Mock()
+        catalog.get = AsyncMock(return_value=info)
+        session = SessionUsage()
+
+        with patch("src.main.logger"):
+            await process_user_turn(
+                agents=agents,
+                ui=ui,
+                messages=history,
+                model="google/gemini-3.7-flash",
+                user_content="test",
+                catalog=catalog,
+                session_usage=session,
+            )
+
+        ui.print_usage.assert_called_once()
+        turn, model_info, cost, session_arg = ui.print_usage.call_args.args
+        self.assertEqual(turn.input_tokens, 230)
+        self.assertEqual(turn.output_tokens, 50)
+        self.assertEqual(turn.context_tokens, 160)
+        self.assertEqual(turn.calls, 2)
+        self.assertIs(model_info, info)
+        self.assertAlmostEqual(cost, 230 * 7.5e-8 + 50 * 3e-7)
+        self.assertIs(session_arg, session)
+        self.assertEqual(session.total_tokens, 280)
+
+    async def test_usage_reporting_is_skipped_without_a_catalog(self):
+        agents = Mock()
+        agents.right_coding_agent = AsyncMock(
+            return_value={"messages": [HumanMessage("test"), AIMessage("done")]}
+        )
+
+        ui = Mock()
+        ui.loading.return_value = nullcontext()
+        ui.has_visible_output.return_value = True
+
+        with patch("src.main.logger"):
+            await process_user_turn(
+                agents=agents,
+                ui=ui,
+                messages=[],
+                model="google/gemini-3.7-flash",
+                user_content="test",
+            )
+
+        ui.print_usage.assert_not_called()

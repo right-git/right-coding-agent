@@ -3,6 +3,7 @@ from io import StringIO
 from unittest.mock import AsyncMock, Mock
 
 from deepagents.middleware.filesystem import FilesystemMiddleware
+from langchain.agents.middleware import SummarizationMiddleware
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.messages import HumanMessage
 from rich.console import Console
@@ -16,7 +17,7 @@ from src.ui import ChatUI
 
 
 class AgentFilesystemConfigTests(unittest.IsolatedAsyncioTestCase):
-    async def test_right_coding_agent_uses_persistent_filesystem_backend(self):
+    async def test_right_coding_agent_has_no_filesystem_middleware(self):
         agent = Agents(
             [
                 LLMProvider(
@@ -35,15 +36,16 @@ class AgentFilesystemConfigTests(unittest.IsolatedAsyncioTestCase):
         )
 
         middlewares = agent.ask_agent.await_args.kwargs["middlewares"]
-        filesystem = next(
-            middleware
-            for middleware in middlewares
-            if isinstance(middleware, FilesystemMiddleware)
+        self.assertFalse(
+            any(
+                isinstance(middleware, FilesystemMiddleware)
+                for middleware in middlewares
+            )
         )
 
 
 class ToolContractTests(unittest.IsolatedAsyncioTestCase):
-    async def test_right_coding_agent_keeps_explicit_tools(self):
+    async def test_right_coding_agent_exposes_only_meta_tools(self):
         agent = Agents(
             [
                 LLMProvider(
@@ -69,14 +71,9 @@ class ToolContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             tool_names,
             [
-                "web_search",
-                "duckduckgo_search",
-                "screen_locate",
-                "screen_mark",
-                "screen_click",
-                "screen_type",
-                "screen_key",
-                "screen_scroll",
+                "search_tools",
+                "get_tool",
+                "run_tools",
             ],
         )
 
@@ -99,8 +96,12 @@ class ToolContractTests(unittest.IsolatedAsyncioTestCase):
 
         middlewares = agent.ask_agent.await_args.kwargs["middlewares"]
 
-        self.assertGreaterEqual(len(middlewares), 2)
-        self.assertTrue(any(isinstance(middleware, FilesystemMiddleware) for middleware in middlewares))
+        self.assertTrue(
+            any(
+                isinstance(middleware, SummarizationMiddleware)
+                for middleware in middlewares
+            )
+        )
 
     def test_system_prompt_does_not_list_tools(self):
         self.assertNotIn("## Tools", Prompts.right_coding_agent_sys)
@@ -181,8 +182,8 @@ class ErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ModelSelectionTests(unittest.TestCase):
-    def test_available_models_include_default_codex_model(self):
-        self.assertIn("openai/gpt-5.1-codex-mini", available_models)
+    def test_available_models_include_default_model(self):
+        self.assertIn("google/gemini-3.7-flash", available_models)
 
 
 class ChatUIRenderingTests(unittest.TestCase):

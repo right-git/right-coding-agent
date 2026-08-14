@@ -12,6 +12,8 @@ from rich.spinner import Spinner
 from rich.text import Text
 from rich.theme import Theme
 from src.config.logging import app_logging
+from src.llm.openrouter import ModelInfo
+from src.llm.usage import SessionUsage, TurnUsage, format_money
 
 theme = Theme({
     "user.prompt": "bold cyan",
@@ -28,7 +30,12 @@ class ChatUI:
         self.console = Console(theme=theme)
         self.model = model
         self.available_models = available_models or []
+        self.model_catalog: dict[str, ModelInfo] = {}
         self.prompt_session: PromptSession | None = None
+
+    def set_model_catalog(self, catalog: dict[str, ModelInfo] | None) -> None:
+        """Install OpenRouter metadata used by /models, /model, and the usage footer."""
+        self.model_catalog = dict(catalog or {})
 
     def _get_prompt_session(self) -> PromptSession:
         if self.prompt_session is None:
@@ -272,28 +279,78 @@ class ChatUI:
             self.console.print(f"  {cmd:<20} {desc}", style="info")
         self.console.print()
 
+    def _model_summary(self, model_id: str) -> str | None:
+        """`ctx 1,048,576 · $0.075/M in, $0.30/M out` for a known model."""
+        info = self.model_catalog.get(model_id)
+        if info is None:
+            return None
+        parts = []
+        if info.context_length:
+            parts.append(f"ctx {info.context_length:,}")
+        if info.prompt_price is not None and info.completion_price is not None:
+            parts.append(
+                f"${info.prompt_price * 1e6:.3g}/M in, "
+                f"${info.completion_price * 1e6:.3g}/M out"
+            )
+        return " · ".join(parts) or None
+
+    def _model_line(self, model_id: str) -> str:
+        summary = self._model_summary(model_id)
+        return f"{model_id}  ({summary})" if summary else model_id
+
     def _print_models(self):
         self.console.print()
-        for m in self.available_models:
+        listed = list(self.available_models)
+        if self.model not in listed:
+            listed.append(self.model)
+        for m in listed:
             marker = "●" if m == self.model else "○"
             style = "success" if m == self.model else "info"
-            self.console.print(f"  {marker} {m}", style=style)
+            self.console.print(f"  {marker} {self._model_line(m)}", style=style)
+        hint = "/model <id> also accepts any OpenRouter model id"
+        if not self.model_catalog:
+            hint += " (OpenRouter catalog not loaded)"
+        self.console.print(f"  {hint}", style="info")
         self.console.print()
 
+    def _apply_model(self, model_name: str) -> None:
+        self.model = model_name
+        self.console.print(
+            f"  switched to {self._model_line(model_name)}", style="success"
+        )
+
     def _switch_model(self, model_name: str) -> str | None:
-        if model_name in self.available_models:
-            self.model = model_name
-            self.console.print(
-                f"  switched to {model_name}", style="success"
-            )
+        if model_name in self.available_models or model_name in self.model_catalog:
+            self._apply_model(model_name)
             return None
 
-        # try partial match
-        matches = [m for m in self.available_models if model_name in m]
-        if len(matches) == 1:
-            self.model = matches[0]
+        # try partial match over the curated list and the OpenRouter catalog
+        needle = model_name.lower()
+        candidates = sorted(
+            {m for m in self.available_models if needle in m.lower()}
+            | {m for m in self.model_catalog if needle in m.lower()}
+        )
+        if len(candidates) == 1:
+            self._apply_model(candidates[0])
+            return None
+        if candidates:
             self.console.print(
-                f"  switched to {matches[0]}", style="success"
+                f"  {len(candidates)} models match {model_name!r}:", style="info"
+            )
+            for candidate in candidates[:8]:
+                self.console.print(f"    {self._model_line(candidate)}", style="info")
+            if len(candidates) > 8:
+                self.console.print(
+                    f"    … and {len(candidates) - 8} more", style="info"
+                )
+            return None
+
+        if not self.model_catalog:
+            self.model = model_name
+            self.console.print(
+                f"  switched to {model_name} "
+                "(not verified — OpenRouter catalog unavailable)",
+                style="success",
             )
             return None
 
@@ -301,6 +358,42 @@ class ChatUI:
             f"  unknown model: {model_name}", style="error"
         )
         return None
+
+    def print_usage(
+        self,
+        turn: TurnUsage,
+        model_info: ModelInfo | None,
+        cost: float | None,
+        session: SessionUsage,
+    ) -> None:
+        """One dim footer line: context fill, turn tokens and cost, session totals."""
+        if turn.calls == 0:
+            self.console.print(
+                "  usage: provider reported no token counts", style="info"
+            )
+            return
+
+        limit = model_info.context_length if model_info else None
+        if limit:
+            percent = 100 * turn.context_tokens / limit
+            context_part = (
+                f"ctx {turn.context_tokens:,}/{limit:,} ({percent:.1f}%)"
+            )
+        else:
+            context_part = f"ctx {turn.context_tokens:,} (limit unknown)"
+
+        turn_part = f"turn {turn.input_tokens:,} in + {turn.output_tokens:,} out"
+        turn_part += (
+            f" ({format_money(cost)})" if cost is not None else " (price unknown)"
+        )
+
+        session_part = f"session {session.total_tokens:,} tokens"
+        approx = "≈" if session.unpriced_turns else ""
+        session_part += f" ({approx}{format_money(session.cost)})"
+
+        self.console.print(
+            f"  {context_part} · {turn_part} · {session_part}", style="info"
+        )
 
     def _switch_log_level(self, level_name: str) -> str | None:
         try:
