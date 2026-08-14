@@ -1,5 +1,10 @@
 # Interactive Screen Locator Design
 
+> **Superseded.** The behaviour described here now lives in the
+> `src/tools/computer_use/` package behind the `ComputerUse` class, which also
+> adds clicking, typing, and on-screen markers. `test.py` is the REPL entry
+> point that composes it. See the "Computer use" section of `README.md`.
+
 ## Goal
 
 Turn `test.py` into a persistent interactive screen locator. The model loads once, then every text query captures a fresh screenshot, locates matching regions, reports their centers, saves an annotated image, and moves the Windows mouse pointer without clicking.

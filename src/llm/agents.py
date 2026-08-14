@@ -9,6 +9,7 @@ from langchain.agents.middleware import (
 )
 from deepagents.backends import LocalShellBackend
 from deepagents.middleware.filesystem import FilesystemMiddleware
+from .computer_tools import COMPUTER_TOOLS
 from .tools import web_search
 from src.config.prompts import Prompts
 from .base import LLMClient
@@ -28,8 +29,9 @@ class Agents(LLMClient):
         )
         
         tools = [
-            web_search,
-            DuckDuckGoSearchRun(),
+            # web_search,
+            # DuckDuckGoSearchRun(),
+            *COMPUTER_TOOLS,
         ]
 
         response = await self.ask_agent(
@@ -56,7 +58,7 @@ class Agents(LLMClient):
                             "and diagnostics when no more specific tool exists."
                         )
                     },
-                ),
+                ), # type: ignore
                 # LLMToolSelectorMiddleware(
                 #     model=self.build_chat_model(
                 #         model_name="openai/gpt-4.1",

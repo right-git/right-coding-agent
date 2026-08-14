@@ -10,4 +10,9 @@ wheels/
 .venv
 .history/
 .env
-logs.logs
+logs.log
+
+# Computer-use artifacts
+output_boxes.jpg
+*.whl
+*.log

@@ -5,50 +5,11 @@ from src.config.base import settings
 from src.config.logging import logger
 from src.llm.types import LLMProvider
 from src.ui import ChatUI
+from src.utils.functions import trim_incomplete_tool_calls
 
 available_models = [
-    "openai/gpt-5.1-codex-mini",
+    "google/gemini-3.7-flash",
 ]
-
-def trim_incomplete_tool_calls(
-    messages: list[HumanMessage | AIMessage | ToolMessage],
-) -> list[HumanMessage | AIMessage | ToolMessage]:
-    """Drop a trailing assistant tool-call block if it has missing tool outputs."""
-    trimmed: list[HumanMessage | AIMessage | ToolMessage] = []
-    pending_tool_calls: set[str] = set()
-    pending_start_index: int | None = None
-
-    for message in messages:
-        if isinstance(message, AIMessage) and message.tool_calls:
-            if pending_tool_calls and pending_start_index is not None:
-                trimmed = trimmed[:pending_start_index]
-            pending_start_index = len(trimmed)
-            pending_tool_calls = {
-                tool_call["id"]
-                for tool_call in message.tool_calls
-                if tool_call.get("id")
-            }
-            trimmed.append(message)
-            continue
-
-        if isinstance(message, ToolMessage):
-            if message.tool_call_id in pending_tool_calls:
-                pending_tool_calls.remove(message.tool_call_id)
-            trimmed.append(message)
-            continue
-
-        if pending_tool_calls and pending_start_index is not None:
-            trimmed = trimmed[:pending_start_index]
-            pending_tool_calls = set()
-            pending_start_index = None
-
-        trimmed.append(message)
-
-    if pending_tool_calls and pending_start_index is not None:
-        trimmed = trimmed[:pending_start_index]
-
-    return trimmed
-
 
 async def process_user_turn(
     *,

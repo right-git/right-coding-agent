@@ -68,7 +68,16 @@ class ToolContractTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             tool_names,
-            ["web_search", "duckduckgo_search"],
+            [
+                "web_search",
+                "duckduckgo_search",
+                "screen_locate",
+                "screen_mark",
+                "screen_click",
+                "screen_type",
+                "screen_key",
+                "screen_scroll",
+            ],
         )
 
     async def test_right_coding_agent_uses_required_middlewares(self):

@@ -2,14 +2,15 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from PIL import Image
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import test as inference_script
-from screen_locator import Detection
+from src.tools.computer_use import Detection, save_annotated_image
+from src.tools.computer_use import locator as locator_module
+from src.tools.computer_use.locator import LocateAnythingLocator
 
 
 class ModelSourceTests(unittest.TestCase):
@@ -19,66 +20,76 @@ class ModelSourceTests(unittest.TestCase):
             (local_model / "config.json").touch()
             (local_model / "model.safetensors.index.json").touch()
 
-            source = inference_script.resolve_model_source(local_model)
+            source = locator_module.resolve_model_source(local_model)
 
         self.assertEqual(source, str(local_model))
+
+    def test_missing_local_model_falls_back_to_the_repository_id(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = locator_module.resolve_model_source(Path(temporary_directory))
+
+        self.assertEqual(source, locator_module.MODEL_ID)
 
 
 class InferenceRequestTests(unittest.TestCase):
     def test_gui_description_is_wrapped_in_the_model_prompt(self):
-        prompt = inference_script.build_gui_prompt("outline button")
+        prompt = locator_module.build_gui_prompt("outline button")
 
         self.assertEqual(
             prompt,
             "Locate the region that matches the following description: outline button.",
         )
 
-    def test_generation_options_use_the_stable_reference_configuration(self):
+    def test_generation_is_greedy_so_the_same_screen_gives_the_same_box(self):
+        options = locator_module.generation_options()
+
         self.assertEqual(
-            inference_script.generation_options(),
+            options,
             {
-                "max_new_tokens": 2048,
+                "max_new_tokens": 96,
                 "use_cache": True,
                 "generation_mode": "hybrid",
-                "temperature": 0.7,
-                "do_sample": True,
-                "top_p": 0.9,
+                "do_sample": False,
                 "repetition_penalty": 1.1,
             },
         )
+        # Sampling knobs must be absent, not merely unused: transformers warns
+        # when they are set alongside do_sample=False.
+        self.assertNotIn("temperature", options)
+        self.assertNotIn("top_p", options)
 
 
 class InferenceDeviceTests(unittest.TestCase):
-    @patch.object(inference_script.torch.backends.mps, "is_available", return_value=True)
-    @patch.object(inference_script.torch.cuda, "is_available", return_value=True)
+    @patch.object(locator_module.torch.backends.mps, "is_available", return_value=True)
+    @patch.object(locator_module.torch.cuda, "is_available", return_value=True)
     def test_cuda_is_preferred_when_available(self, _cuda_available, _mps_available):
-        device, dtype = inference_script.select_inference_device()
+        device, dtype = locator_module.select_inference_device()
 
         self.assertEqual(device, "cuda")
-        self.assertIs(dtype, inference_script.torch.bfloat16)
+        self.assertIs(dtype, locator_module.torch.bfloat16)
 
-    @patch.object(inference_script.torch.backends.mps, "is_available", return_value=True)
-    @patch.object(inference_script.torch.cuda, "is_available", return_value=False)
+    @patch.object(locator_module.torch.backends.mps, "is_available", return_value=True)
+    @patch.object(locator_module.torch.cuda, "is_available", return_value=False)
     def test_mps_is_used_when_cuda_is_unavailable(self, _cuda_available, _mps_available):
-        device, dtype = inference_script.select_inference_device()
+        device, dtype = locator_module.select_inference_device()
 
         self.assertEqual(device, "mps")
-        self.assertIs(dtype, inference_script.torch.float16)
+        self.assertIs(dtype, locator_module.torch.float16)
 
-    @patch.object(inference_script.torch.backends.mps, "is_available", return_value=False)
-    @patch.object(inference_script.torch.cuda, "is_available", return_value=False)
+    @patch.object(locator_module.torch.backends.mps, "is_available", return_value=False)
+    @patch.object(locator_module.torch.cuda, "is_available", return_value=False)
     def test_cpu_uses_float32(self, _cuda_available, _mps_available):
-        device, dtype = inference_script.select_inference_device()
+        device, dtype = locator_module.select_inference_device()
 
         self.assertEqual(device, "cpu")
-        self.assertIs(dtype, inference_script.torch.float32)
+        self.assertIs(dtype, locator_module.torch.float32)
 
 
 class RuntimeTests(unittest.TestCase):
-    @patch.object(inference_script, "select_inference_device")
-    @patch.object(inference_script.AutoModel, "from_pretrained")
-    @patch.object(inference_script.AutoProcessor, "from_pretrained")
-    @patch.object(inference_script.AutoTokenizer, "from_pretrained")
+    @patch.object(locator_module, "select_inference_device")
+    @patch.object(locator_module.AutoModel, "from_pretrained")
+    @patch.object(locator_module.AutoProcessor, "from_pretrained")
+    @patch.object(locator_module.AutoTokenizer, "from_pretrained")
     def test_runtime_loads_each_model_component_once_on_the_selected_device(
         self,
         tokenizer_loader,
@@ -90,31 +101,31 @@ class RuntimeTests(unittest.TestCase):
         processor = processor_loader.return_value
         loaded_model = model_loader.return_value
         evaluated_model = loaded_model.to.return_value.eval.return_value
-        select_device.return_value = ("cuda", inference_script.torch.bfloat16)
+        select_device.return_value = ("cuda", locator_module.torch.bfloat16)
 
-        runtime = inference_script.load_runtime()
+        runtime = locator_module.load_runtime()
 
         tokenizer_loader.assert_called_once_with(
-            inference_script.MODEL, trust_remote_code=True
+            locator_module.MODEL, trust_remote_code=True
         )
         processor_loader.assert_called_once_with(
-            inference_script.MODEL, trust_remote_code=True
+            locator_module.MODEL, trust_remote_code=True
         )
         model_loader.assert_called_once_with(
-            inference_script.MODEL,
-            dtype=inference_script.torch.bfloat16,
+            locator_module.MODEL,
+            dtype=locator_module.torch.bfloat16,
             trust_remote_code=True,
         )
         loaded_model.to.assert_called_once_with("cuda")
         loaded_model.to.return_value.eval.assert_called_once_with()
         self.assertEqual(
             runtime,
-            inference_script.InferenceRuntime(
+            locator_module.InferenceRuntime(
                 tokenizer=tokenizer,
                 processor=processor,
                 model=evaluated_model,
                 device="cuda",
-                dtype=inference_script.torch.bfloat16,
+                dtype=locator_module.torch.bfloat16,
             ),
         )
 
@@ -151,16 +162,16 @@ class RuntimeTests(unittest.TestCase):
         model.generate.return_value = (
             "<ref>outline button</ref><box><100><200><500><600></box>"
         )
-        runtime = inference_script.InferenceRuntime(
+        runtime = locator_module.InferenceRuntime(
             tokenizer=tokenizer,
             processor=processor,
             model=model,
             device="cuda",
-            dtype=inference_script.torch.float16,
+            dtype=locator_module.torch.float16,
         )
         screenshot = Image.new("RGB", (1600, 800), "white")
 
-        detections = inference_script.locate_on_screen(
+        detections = locator_module.locate_on_screen(
             runtime, screenshot, "outline button"
         )
 
@@ -174,7 +185,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(screenshot.size, (1600, 800))
         self.assertEqual(
             messages[0]["content"][1]["text"],
-            inference_script.build_gui_prompt("outline button"),
+            locator_module.build_gui_prompt("outline button"),
         )
         processor.py_apply_chat_template.assert_called_once_with(
             messages, tokenize=False, add_generation_prompt=True
@@ -187,15 +198,71 @@ class RuntimeTests(unittest.TestCase):
             return_tensors="pt",
         )
         self.assertEqual(inputs.moved_to, ["cuda"])
-        pixel_values.to.assert_called_once_with(inference_script.torch.float16)
+        pixel_values.to.assert_called_once_with(locator_module.torch.float16)
         model.generate.assert_called_once_with(
             pixel_values=cast_pixel_values,
             input_ids=input_ids,
             attention_mask=attention_mask,
             image_grid_hws=image_grid_hws,
             tokenizer=tokenizer,
-            **inference_script.generation_options(),
+            **locator_module.generation_options(),
         )
+
+
+class LocatorTests(unittest.TestCase):
+    def test_loading_warms_the_model_up(self):
+        loader = Mock(return_value=object())
+        locator = LocateAnythingLocator(loader=loader)
+
+        with patch.object(
+            locator_module, "locate_on_screen", return_value=[]
+        ) as locate_on_screen:
+            locator.load()
+
+        locate_on_screen.assert_called_once()
+        self.assertEqual(locate_on_screen.call_args.args[2], "warmup")
+
+    def test_a_failing_warm_up_does_not_break_loading(self):
+        runtime = object()
+        locator = LocateAnythingLocator(loader=Mock(return_value=runtime))
+
+        with patch.object(
+            locator_module, "locate_on_screen", side_effect=RuntimeError("no cuda")
+        ):
+            self.assertIs(locator.load(), runtime)
+
+    def test_the_runtime_is_loaded_once_and_reused_for_every_query(self):
+        runtime = object()
+        loader = Mock(return_value=runtime)
+        locator = LocateAnythingLocator(loader=loader, warmup=False)
+        first_image = Image.new("RGB", (10, 10))
+        second_image = Image.new("RGB", (20, 20))
+
+        self.assertFalse(locator.is_loaded)
+        with patch.object(
+            locator_module, "locate_on_screen", return_value=[]
+        ) as locate_on_screen:
+            locator.locate(first_image, "first")
+            locator.locate(second_image, "second")
+
+        loader.assert_called_once_with()
+        self.assertTrue(locator.is_loaded)
+        self.assertEqual(
+            [call.args for call in locate_on_screen.call_args_list],
+            [(runtime, first_image, "first"), (runtime, second_image, "second")],
+        )
+        self.assertEqual(
+            locate_on_screen.call_args.kwargs,
+            {"max_image_side": locator_module.MAX_IMAGE_SIDE},
+        )
+
+    def test_an_injected_runtime_is_never_reloaded(self):
+        loader = Mock()
+        locator = LocateAnythingLocator(runtime=object(), loader=loader)
+
+        locator.load()
+
+        loader.assert_not_called()
 
 
 class AnnotatedImageTests(unittest.TestCase):
@@ -210,8 +277,9 @@ class AnnotatedImageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_path = Path(temporary_directory) / "annotated.jpg"
 
-            inference_script.save_annotated_image(source, detections, output_path)
+            saved_path = save_annotated_image(source, detections, output_path)
 
+            self.assertEqual(saved_path, output_path)
             self.assertTrue(output_path.is_file())
             with Image.open(output_path) as saved:
                 self.assertEqual(saved.format, "JPEG")
@@ -227,49 +295,12 @@ class AnnotatedImageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_path = Path(temporary_directory) / "unannotated.jpg"
 
-            inference_script.save_annotated_image(source, [], output_path)
+            save_annotated_image(source, [], output_path)
 
             with Image.open(output_path) as saved:
                 saved.load()
                 self.assertEqual(saved.format, "JPEG")
                 self.assertEqual(saved.size, source.size)
-
-
-class ApplicationCompositionTests(unittest.TestCase):
-    @patch.object(inference_script, "run_interactive_loop")
-    @patch.object(inference_script, "load_runtime")
-    @patch.object(inference_script, "enable_dpi_awareness")
-    def test_main_loads_one_runtime_and_reuses_it_for_every_query(
-        self, enable_dpi_awareness, load_runtime, run_interactive_loop
-    ):
-        runtime = object()
-        load_runtime.return_value = runtime
-
-        inference_script.main()
-
-        enable_dpi_awareness.assert_called_once_with()
-        load_runtime.assert_called_once_with()
-        run_interactive_loop.assert_called_once_with(
-            locate=run_interactive_loop.call_args.kwargs["locate"],
-            capture_screen=inference_script.capture_primary_screen,
-            move_pointer=inference_script.move_pointer,
-            save_result=inference_script.save_annotated_image,
-        )
-        locate = run_interactive_loop.call_args.kwargs["locate"]
-        first_image = Image.new("RGB", (10, 10))
-        second_image = Image.new("RGB", (20, 20))
-        with patch.object(
-            inference_script, "locate_on_screen", return_value=[]
-        ) as locate_on_screen:
-            locate(first_image, "first")
-            locate(second_image, "second")
-
-        locate_on_screen.assert_has_calls(
-            [
-                call(runtime, first_image, "first"),
-                call(runtime, second_image, "second"),
-            ]
-        )
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@
 - Multi-provider LLM client with retry/failover logic, Azure OpenAI support, and structured output via LangChain.
 - Built-in agent and tools: `Agents` adds system prompts, `LLMClient` manages model/tool initialization, and `src/llm/tools.py` contains `@tool`-decorated functions.
 - The `WebParser` tool (`src/tools/web_parser/`) fetches web pages over HTTP, parses them with BeautifulSoup, and converts to Markdown.
+- The `ComputerUse` tool (`src/tools/computer_use/`) gives the agent eyes and hands on the desktop: it finds on-screen elements from a plain-language description, drives the mouse and keyboard, and can point at an element with an on-screen tooltip instead of clicking it.
 
 ## Quick Start
 
@@ -33,9 +34,90 @@
 - `src/llm/` — agent core:
   - `base.py` manages the LLM client;
   - `agents.py` implements specific agents (such as `right_coding_agent()`);
-  - `tools.py` — utility LangChain tools.
+  - `tools.py` — utility LangChain tools;
+  - `computer_tools.py` — `screen_*` LangChain tools wrapping `ComputerUse`.
 - `src/tools/web_parser/` — standalone HTTP client and HTML-to-Markdown parser.
+- `src/tools/computer_use/` — screen understanding and desktop control (see below).
+- `test.py` — interactive screen-locator REPL built on `ComputerUse`.
 - Tests are located in `tests/`.
+
+## Computer use
+
+`ComputerUse` (`src/tools/computer_use/`) combines a vision locator with mouse
+and keyboard control. Detection runs on `nvidia/LocateAnything-3B`, which is
+loaded lazily on the first query and reused afterwards.
+
+```python
+from src.tools.computer_use import ComputerUse
+
+computer = ComputerUse()
+
+computer.get_screenshot()                       # capture the primary display
+computer.locate_object("the render button")     # -> [Detection(label, box)]
+computer.locate_point("the render button")      # -> clickable (x, y)
+
+computer.left_click(x, y)                       # also right/middle/double/triple
+computer.click_object("the save button")        # locate by description, then click
+computer.type_text("hello")                     # unicode-safe typing
+computer.key("ctrl+shift+s")                    # shortcuts, space-separated sequences
+computer.scroll("down", 3)
+computer.drag((100, 200), (400, 200))
+
+computer.mark_object(                           # show, don't touch
+    "кнопка рендера",
+    "Запускает просчёт таймлайна. Нажатие начнёт экспорт.",
+)
+computer.close()                                # release the overlay window
+```
+
+`mark_object` is the "just show me where it is" path: it moves the pointer onto
+the element, outlines it, and shows a click-through tooltip next to the cursor
+with your explanation. It never clicks.
+
+### Locating accurately
+
+The screen is squeezed to 768 px before the model sees it, so a 42-px text
+field arrives as a 17-px smear and the returned box drifts by ~100 px — enough
+to click outside the element. `locate_object` therefore runs a coarse pass over
+the whole screen to find the neighbourhood, then a second pass over a crop of it
+at native resolution: measured 99 px → 5 px on that field.
+
+Pass `region=` whenever the neighbourhood is already known (an app window, a
+panel found earlier). A region that fits in 768 px is searched at native
+resolution in a single pass — both faster and as accurate:
+
+```python
+panel = computer.find_object("the export panel")
+computer.click_object("the render button", region=panel.box)
+```
+
+Repeating a query while the screen has not changed is served from cache without
+touching the model. Decoding is greedy: on queries the model is unsure about,
+sampling returned five different boxes in five runs.
+
+Module layout:
+
+- `base.py` — the `ComputerUse` facade;
+- `locator.py` — LocateAnything runtime (the only module that imports torch);
+- `screen.py` — DPI awareness and primary-display capture;
+- `pointer.py` — Win32 `SendInput` mouse and keyboard control;
+- `overlay.py` — the Tk marker overlay, on a single long-lived Tk loop;
+- `detection.py` — model-output parsing and box geometry;
+- `annotation.py` — annotated JPEG output;
+- `fakes.py` — inert backends for dry runs, headless use, and tests.
+
+Platform notes: pointer control and DPI awareness are Windows-only; detection,
+parsing, and annotation are platform-independent. Every OS call sits behind an
+injected seam, so tests never touch the real desktop.
+
+### Interactive REPL
+
+```bash
+uv run test.py
+```
+
+Commands: `:mode first`, `:mode all`, `:mark <описание> | <подсказка>`,
+`:click <описание>`, `exit`.
 
 ## Extension
 
