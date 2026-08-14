@@ -1,17 +1,21 @@
+import os
 import sys
 from contextlib import contextmanager
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
+from rich import box
 from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.spinner import Spinner
+from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
 from src.config.logging import app_logging
+from src.llm.log_middleware import scrub_text
 from src.llm.openrouter import ModelInfo
 from src.llm.usage import SessionUsage, TurnUsage, format_money
 
@@ -44,14 +48,25 @@ class ChatUI:
 
     def print_welcome(self):
         self.console.clear()
+        info = Table.grid(padding=(0, 2))
+        info.add_column(style="info", justify="right", no_wrap=True)
+        info.add_column()
+        info.add_row("model", self.model)
+        info.add_row("cwd", os.getcwd())
+        info.add_row("logs", "logs.log")
+        info.add_row("vision", "nvidia/LocateAnything-3B · loads in background")
+        info.add_row("", Text("/help for commands · /quit to exit", style="info"))
         self.console.print()
-        title = Text("  Right Code  ", style="bold white on magenta")
-        self.console.print(title)
         self.console.print(
-            f"  model: {self.model}", style="info"
-        )
-        self.console.print(
-            "  type /help for commands, /quit to exit", style="info"
+            Panel(
+                info,
+                title="[bold magenta]✻ Right Code[/]",
+                title_align="left",
+                border_style="magenta",
+                box=box.ROUNDED,
+                padding=(0, 2),
+                expand=False,
+            )
         )
         self.console.print()
 
@@ -104,21 +119,49 @@ class ChatUI:
         name = tc["name"]
         args = tc["args"]
 
-        if name == "ls":
-            return f"List {args.get('path', '.')}", ""
-        if name == "read_file":
-            return f"Read {args.get('file_path', '')}", ""
-        if name == "write_file":
-            return f"Write {args.get('file_path', '')}", ""
-        if name == "edit_file":
-            return f"Edit {args.get('file_path', '')}", ""
-        if name == "execute":
-            return "Run", args.get("command", "")
-        if name == "web_search":
-            return "Fetch", args.get("url", "")
+        if name == "search_tools":
+            return f"Search tools · {args.get('query', '')}", ""
+        if name == "get_tool":
+            return f"Read tool docs · {args.get('name', '')}", ""
+        if name == "run_tools":
+            return "Run tools script", args.get("code", "")
 
         args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
         return name, args_str
+
+    MAX_DETAIL_LINES = 6
+
+    def _print_tool_call(self, tc: dict) -> None:
+        label, detail = self._format_tool_call(tc)
+        self.console.print(f"  ● {label}", style="tool.name", markup=False)
+        if not detail:
+            return
+        lines = detail.splitlines()
+        for line in lines[: self.MAX_DETAIL_LINES]:
+            self.console.print(
+                f"  │ {line}", style="info", markup=False, highlight=False
+            )
+        if len(lines) > self.MAX_DETAIL_LINES:
+            self.console.print(
+                f"  │ … +{len(lines) - self.MAX_DETAIL_LINES} more lines",
+                style="info",
+                markup=False,
+            )
+
+    def _print_tool_result(self, msg: ToolMessage) -> None:
+        content_str = str(msg.content)
+        is_error = (
+            msg.status == "error"
+            or content_str.startswith("Error")
+            or content_str.startswith("Tool call failed")
+        )
+        preview = scrub_text(" ".join(content_str.split()), 200)
+        self.console.print(
+            f"  ⎿ {preview}",
+            style="error" if is_error else "info",
+            markup=False,
+            highlight=False,
+        )
 
     def _render_ai_content(self, content: str | list[dict] | None) -> str:
         if isinstance(content, str):
@@ -177,15 +220,7 @@ class ChatUI:
             if isinstance(msg, AIMessage):
                 if msg.tool_calls:
                     for tc in msg.tool_calls:
-                        label, detail = self._format_tool_call(tc)
-                        self.console.print(
-                            f"  ● {label}",
-                            style="tool.name",
-                        )
-                        if detail:
-                            self.console.print(
-                                f"    {detail}", style="info"
-                            )
+                        self._print_tool_call(tc)
                 else:
                     rendered_content = self._render_ai_content(msg.content)
                     if not rendered_content:
@@ -202,20 +237,7 @@ class ChatUI:
                     self.console.print()
 
             elif isinstance(msg, ToolMessage):
-                content_str = str(msg.content)
-                is_error = (
-                    msg.status == "error"
-                    or content_str.startswith("Error")
-                    or content_str.startswith("Tool call failed")
-                )
-                marker = "✗" if is_error else "✓"
-                style = "error" if is_error else "success"
-                content_preview = content_str[:120]
-                if len(content_str) > 120:
-                    content_preview += "…"
-                self.console.print(
-                    f"  {marker} {content_preview}", style=style
-                )
+                self._print_tool_result(msg)
 
     async def get_tool_approval(self, tool_calls: list[dict]) -> dict:
         """Show pending tool calls and ask user to approve, edit, or reject.
@@ -226,9 +248,11 @@ class ChatUI:
         decisions = []
         for tc in tool_calls:
             label, detail = self._format_tool_call(tc)
-            self.console.print(f"  ? {label}", style="tool.name")
-            if detail:
-                self.console.print(f"    {detail}", style="info")
+            self.console.print(f"  ? {label}", style="tool.name", markup=False)
+            for line in detail.splitlines()[: self.MAX_DETAIL_LINES]:
+                self.console.print(
+                    f"  │ {line}", style="info", markup=False, highlight=False
+                )
             self.console.print(
                 "    [Y] approve  [e] edit  [n] reject", style="info"
             )

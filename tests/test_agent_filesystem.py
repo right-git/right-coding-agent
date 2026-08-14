@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, Mock
 
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from langchain.agents.middleware import SummarizationMiddleware
+
+from src.llm.log_middleware import MessageLogMiddleware
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.messages import HumanMessage
 from rich.console import Console
@@ -102,6 +104,7 @@ class ToolContractTests(unittest.IsolatedAsyncioTestCase):
                 for middleware in middlewares
             )
         )
+        self.assertIsInstance(middlewares[-1], MessageLogMiddleware)
 
     def test_system_prompt_does_not_list_tools(self):
         self.assertNotIn("## Tools", Prompts.right_coding_agent_sys)

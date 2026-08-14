@@ -7,6 +7,7 @@ from PIL import Image
 from transformers import AutoModel, AutoProcessor, AutoTokenizer
 
 from src.config.logging import logger
+from src.utils.silence import silenced
 
 from .detection import parse_detections, resize_for_inference
 from .types import Detection
@@ -83,6 +84,14 @@ class InferenceRuntime:
     model: Any
     device: str
     dtype: torch.dtype
+
+
+def quiet_transformers() -> None:
+    """Silence transformers' chatter and progress bars before loading."""
+    from transformers.utils import logging as hf_logging
+
+    hf_logging.set_verbosity_error()
+    hf_logging.disable_progress_bar()
 
 
 def load_runtime() -> InferenceRuntime:
@@ -165,9 +174,13 @@ class LocateAnythingLocator:
 
     def load(self) -> InferenceRuntime:
         if self._runtime is None:
-            self._runtime = self._loader()
-            if self._warmup:
-                self.warm_up(self._runtime)
+            # Loading and warm-up spew library warnings and progress bars;
+            # they run on background threads, so mute this thread only.
+            with silenced():
+                quiet_transformers()
+                self._runtime = self._loader()
+                if self._warmup:
+                    self.warm_up(self._runtime)
         return self._runtime
 
     def warm_up(self, runtime: InferenceRuntime) -> None:
@@ -187,9 +200,11 @@ class LocateAnythingLocator:
             logger.warning("Locator warm-up failed; the first query will be slower")
 
     def locate(self, image: Image.Image, description: str) -> list[Detection]:
-        return locate_on_screen(
-            self.load(),
-            image,
-            description,
-            max_image_side=self.max_image_side,
-        )
+        runtime = self.load()
+        with silenced():
+            return locate_on_screen(
+                runtime,
+                image,
+                description,
+                max_image_side=self.max_image_side,
+            )

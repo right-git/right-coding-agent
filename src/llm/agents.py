@@ -6,6 +6,7 @@ from langchain.agents.middleware import (
     SummarizationMiddleware,
 )
 from .attachments import AttachedImagesMiddleware
+from .log_middleware import MessageLogMiddleware
 from .meta_tools import META_TOOLS
 from src.config.prompts import Prompts
 from .base import LLMClient
@@ -50,6 +51,9 @@ class Agents(LLMClient):
                 #     ),
                 #     max_tools=3
                 # ),
+                # Last, so it logs the message list as the model receives it —
+                # after image surfacing and summarization have run.
+                MessageLogMiddleware(),
             ],
         )
 

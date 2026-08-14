@@ -1,6 +1,9 @@
+import io
 import sys
 import tempfile
 import unittest
+import warnings
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
@@ -263,6 +266,22 @@ class LocatorTests(unittest.TestCase):
         locator.load()
 
         loader.assert_not_called()
+
+    def test_loading_noise_never_reaches_the_terminal(self):
+        def noisy_loader():
+            print("flash_attn is not available; falling back to sdpa")
+            warnings.warn("deprecated", FutureWarning)
+            return object()
+
+        stdout_buffer = io.StringIO()
+        stderr_buffer = io.StringIO()
+        locator = LocateAnythingLocator(loader=noisy_loader, warmup=False)
+
+        with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+            self.assertTrue(locator.load() is not None)
+
+        self.assertEqual(stdout_buffer.getvalue(), "")
+        self.assertEqual(stderr_buffer.getvalue(), "")
 
 
 class AnnotatedImageTests(unittest.TestCase):

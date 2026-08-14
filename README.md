@@ -192,7 +192,12 @@ Commands: `:mode first`, `:mode all`, `:mark <описание> | <подска�
 ## Development
 
 - Environment manager: `uv`.
-- Logging: `loguru` writes to `logs.log`.
+- Logging: `loguru` writes to `logs.log`. Every model request is also logged
+  there as one JSON line with base64/data-URI payloads stripped
+  (`MessageLogMiddleware`).
+- Vision-model loading noise (transformers warnings, progress bars) is muted
+  per-thread (`src/utils/silence.py`) so background loads never print over
+  the prompt.
 - To run tests (if any), use standard pytest/uv commands:
   ```bash
   uv run python -m pytest
