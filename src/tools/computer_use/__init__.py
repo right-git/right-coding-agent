@@ -8,7 +8,12 @@ The heavy vision model is imported lazily, so importing this package stays
 cheap until the first `locate_object` / `mark_object` call.
 """
 
-from .annotation import DEFAULT_OUTPUT_PATH, annotate, save_annotated_image
+from .annotation import (
+    DEFAULT_OUTPUT_PATH,
+    annotate,
+    image_to_base64,
+    save_annotated_image,
+)
 from .base import ComputerUse
 from .detection import (
     box_center,
@@ -62,6 +67,7 @@ __all__ = [
     "clamp_point",
     "describe_detections",
     "enable_dpi_awareness",
+    "image_to_base64",
     "move_pointer",
     "parse_detections",
     "primary_screen_size",

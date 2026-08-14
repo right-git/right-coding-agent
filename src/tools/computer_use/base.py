@@ -7,7 +7,12 @@ from PIL import Image
 
 from src.config.logging import logger
 
-from .annotation import DEFAULT_OUTPUT_PATH, save_annotated_image
+from .annotation import (
+    DEFAULT_OUTPUT_PATH,
+    annotate,
+    image_to_base64,
+    save_annotated_image,
+)
 from .detection import (
     box_center,
     clamp_box,
@@ -156,6 +161,38 @@ class ComputerUse:
         if save_to is not None:
             screenshot.save(save_to)
         return screenshot
+
+    def screenshot_base64(
+        self,
+        *,
+        max_side: int | None = 1280,
+        quality: int = 80,
+        fresh: bool = True,
+    ) -> str:
+        """The screen as base64 JPEG; `fresh=False` reuses the last capture."""
+        if fresh or self.last_screenshot is None:
+            image = self.get_screenshot()
+        else:
+            image = self.last_screenshot
+        return image_to_base64(image, max_side=max_side, quality=quality)
+
+    def annotated_base64(
+        self,
+        image: Image.Image | None = None,
+        detections: Sequence[Detection] | None = None,
+        *,
+        max_side: int | None = 1280,
+        quality: int = 80,
+    ) -> str:
+        """The current view with detection boxes drawn, as base64 JPEG."""
+        if image is None:
+            image = self.last_screenshot
+        if image is None:
+            raise RuntimeError("No screenshot to annotate; call get_screenshot first")
+        annotated = annotate(
+            image, self.last_detections if detections is None else detections
+        )
+        return image_to_base64(annotated, max_side=max_side, quality=quality)
 
     @property
     def inference_side(self) -> int:

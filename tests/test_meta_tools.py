@@ -277,6 +277,7 @@ class DefaultRegistryTests(unittest.TestCase):
             [
                 "web_search",
                 "screen_locate",
+                "screen_screenshot",
                 "screen_mark",
                 "screen_click",
                 "screen_type",

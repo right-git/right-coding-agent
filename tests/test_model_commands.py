@@ -121,9 +121,25 @@ class UsageFooterTests(unittest.TestCase):
         ui.print_usage(turn, GEMINI, 0.0012, session)
 
         rendered = ui.console.export_text()
-        self.assertIn("ctx 14,204/1,048,576 (1.4%)", rendered)
+        self.assertIn("14,204/1,048,576 (1.4%)", rendered)
+        self.assertIn("█" + "░" * 19, rendered)
         self.assertIn("turn 13,900 in + 304 out ($0.0012)", rendered)
         self.assertIn("session 14,204 tokens ($0.0012)", rendered)
+
+    def test_context_bar_fills_and_changes_color_with_usage(self):
+        ui = make_ui()
+
+        self.assertEqual(
+            ui._context_bar(0, 100), "[green]" + "[/]" + "░" * 20
+        )
+        self.assertEqual(
+            ui._context_bar(50, 100), "[green]" + "█" * 10 + "[/]" + "░" * 10
+        )
+        self.assertEqual(
+            ui._context_bar(80, 100), "[yellow]" + "█" * 16 + "[/]" + "░" * 4
+        )
+        self.assertEqual(ui._context_bar(100, 100), "[red]" + "█" * 20 + "[/]")
+        self.assertEqual(ui._context_bar(250, 100), "[red]" + "█" * 20 + "[/]")
 
     def test_footer_without_model_info_marks_unknown_limit_and_price(self):
         ui = make_ui()

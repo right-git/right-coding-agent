@@ -18,6 +18,22 @@ available_models = [
 ]
 
 
+def preload_vision_model() -> None:
+    """Load the LocateAnything vision model so the first screen query is fast.
+
+    Runs in a worker thread at startup; a failure only costs the warm start,
+    the locator will retry lazily on first use.
+    """
+    try:
+        from src.llm.computer_tools import warm_up_computer
+
+        logger.info("Preloading the vision locator model")
+        warm_up_computer()
+        logger.info("Vision locator model is ready")
+    except Exception:
+        logger.exception("Vision model preload failed")
+
+
 async def report_usage(
     *,
     ui: ChatUI,
@@ -179,6 +195,7 @@ async def main():
     # in-loop refresh below retries (rate-limited by the catalog's cooldown)
     # if this initial attempt failed.
     catalog_task = asyncio.create_task(load_catalog())
+    vision_task = asyncio.create_task(asyncio.to_thread(preload_vision_model))
 
     try:
         while True:
@@ -208,6 +225,7 @@ async def main():
             )
     finally:
         catalog_task.cancel()
+        vision_task.cancel()
 
 
 if __name__ == "__main__":

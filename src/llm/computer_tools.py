@@ -4,6 +4,7 @@ import asyncio
 
 from langchain_core.tools import tool
 
+from src.llm.attachments import attach_image
 from src.tools.computer_use import ComputerUse
 
 
@@ -24,8 +25,16 @@ def set_computer(computer: ComputerUse | None) -> None:
     _computer = computer
 
 
+def warm_up_computer() -> None:
+    """Load the vision locator now instead of on the first screen query."""
+    locator = get_computer().locator
+    load = getattr(locator, "load", None)
+    if callable(load):
+        load()
+
+
 @tool(parse_docstring=True, return_direct=False)
-async def screen_locate(description: str) -> str:
+async def screen_locate(description: str, return_screen: bool = False) -> str:
     """Find where something is on the user's screen right now.
 
     Call this whenever the user asks about something visible on their screen —
@@ -35,15 +44,63 @@ async def screen_locate(description: str) -> str:
     Args:
         description: What to look for, in plain language, for example
             "the render button in the export panel".
+        return_screen: Also capture the screen with every match outlined and
+            attach it to the conversation, so you can see the layout instead
+            of only coordinates.
 
     Returns:
         Every match with its bounding box and clickable center, or a note that
-        nothing matched.
+        nothing matched. With return_screen the annotated screenshot is
+        attached as an image you can see.
     """
     try:
         computer = get_computer()
         detections = await asyncio.to_thread(computer.locate_object, description)
-        return computer.describe(detections)
+        text = computer.describe(detections)
+        if return_screen:
+            encoded = await asyncio.to_thread(computer.annotated_base64)
+            if attach_image(
+                encoded, "image/jpeg", label=f"screen_locate: {description}"
+            ):
+                text += "\n(annotated screenshot attached as an image)"
+            else:
+                text += f"\nAnnotated screenshot, base64 JPEG: {encoded}"
+        return text
+    except Exception as error:
+        return f"Tool call failed, error: {error}"
+
+
+@tool(parse_docstring=True, return_direct=False)
+async def screen_screenshot(return_base64: bool = False, max_side: int = 1280) -> str:
+    """Capture the user's screen so you can look at what is on it.
+
+    The captured image is attached to the conversation and shown to you as a
+    picture. Use it to understand layout, read anything the locator cannot
+    describe, or check the result of an action.
+
+    Args:
+        return_base64: Also include the raw base64 JPEG in the text result,
+            for passing to another tool. You cannot see an image from base64
+            text — the attached picture is what you look at.
+        max_side: Longest side of the captured image in pixels; smaller is
+            cheaper, larger is sharper.
+
+    Returns:
+        Confirmation text; the screenshot itself arrives as an attached
+        image. With return_base64 the raw base64 JPEG is appended.
+    """
+    try:
+        computer = get_computer()
+        encoded = await asyncio.to_thread(
+            lambda: computer.screenshot_base64(max_side=max_side)
+        )
+        attached = attach_image(encoded, "image/jpeg", label="screenshot")
+        parts = ["Captured the screen."]
+        if attached:
+            parts.append("The screenshot is attached as an image.")
+        if return_base64 or not attached:
+            parts.append(f"base64 JPEG: {encoded}")
+        return " ".join(parts)
     except Exception as error:
         return f"Tool call failed, error: {error}"
 
@@ -177,6 +234,7 @@ async def screen_scroll(direction: str, amount: int = 3) -> str:
 
 COMPUTER_TOOLS = [
     screen_locate,
+    screen_screenshot,
     screen_mark,
     screen_click,
     screen_type,

@@ -1,3 +1,5 @@
+import base64
+import io
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -8,6 +10,34 @@ from .types import Detection
 
 DEFAULT_OUTPUT_PATH = Path("output_boxes.jpg")
 COLORS = ("#FF3B30", "#34C759", "#007AFF", "#FF9500", "#AF52DE", "#00C7BE")
+
+
+def image_to_base64(
+    image: Image.Image,
+    *,
+    max_side: int | None = 1280,
+    format: str = "JPEG",
+    quality: int = 80,
+) -> str:
+    """Encode an image as base64 for transport to a multimodal model.
+
+    `max_side` bounds the longest edge — a full-resolution desktop capture
+    costs several times more vision tokens than a 1280px one and reads just
+    as well for layout questions.
+    """
+    if max_side and max(image.size) > max_side:
+        scale = max_side / max(image.size)
+        image = image.resize(
+            (
+                max(1, round(image.width * scale)),
+                max(1, round(image.height * scale)),
+            )
+        )
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    buffer = io.BytesIO()
+    image.save(buffer, format=format, quality=quality)
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
 def annotate(image: Image.Image, detections: Sequence[Detection]) -> Image.Image:

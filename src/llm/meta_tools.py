@@ -18,12 +18,14 @@ from langchain_core.tools import BaseTool, tool
 from src.config.logging import logger
 from src.tools.base import Interpreter
 
+from .attachments import collecting_images
 from .computer_tools import COMPUTER_TOOLS
 from .tools import web_search
 
 
 SEARCH_LIMIT = 8
 MAX_RESULT_CHARS = 40_000
+MAX_ATTACHED_IMAGES = 6
 
 # Names the interpreter resolves before the tool table (its builtins and the
 # `parallel` special form). A tool registered under one of these would be
@@ -244,8 +246,12 @@ async def get_tool(name: str) -> str:
         return f"Tool call failed, error: {error}"
 
 
-@tool(parse_docstring=True, return_direct=False)
-async def run_tools(code: str) -> str:
+@tool(
+    parse_docstring=True,
+    return_direct=False,
+    response_format="content_and_artifact",
+)
+async def run_tools(code: str) -> tuple[str, list[dict]]:
     """Run a Python script, server-side, that calls tools and combines results.
 
     This is how registered tools get used: find them with search_tools, read
@@ -270,7 +276,11 @@ async def run_tools(code: str) -> str:
     - parallel(tool_a(...), tool_b(...), ...) runs direct tool calls
       concurrently and returns their results as a list, in order. Use it
       only for independent calls, and never for screen_* tools — the
-      desktop is one shared device.
+      desktop is one shared device;
+    - tools that capture the screen (screen_screenshot, screen_locate with
+      return_screen=True) attach the picture to the conversation: you will
+      see it right after this tool's result. Base64 text is never visible
+      to you, so do not return image data from the script.
 
     Not available: import, def/lambda/class, generators, for/while-else,
     subscript assignment (build dicts with dict.update({...}) and lists
@@ -283,22 +293,29 @@ async def run_tools(code: str) -> str:
 
     Returns:
         JSON object with `result` (the returned value), `logs` (print
-        output), and `error` (null on success, otherwise why the run
-        stopped).
+        output), `error` (null on success, otherwise why the run stopped),
+        and `attached_images` when the run captured screenshots for you.
     """
     try:
         registry = get_registry()
         interpreter = Interpreter(registry.callables())
-        outcome = await interpreter.run(code)
+        with collecting_images() as images:
+            outcome = await interpreter.run(code)
+        if len(images) > MAX_ATTACHED_IMAGES:
+            outcome["dropped_images"] = len(images) - MAX_ATTACHED_IMAGES
+            del images[:-MAX_ATTACHED_IMAGES]
+        if images:
+            outcome["attached_images"] = len(images)
         logger.info(
-            "run_tools finished ops [{}] logs [{}] error [{}]",
+            "run_tools finished ops [{}] logs [{}] images [{}] error [{}]",
             interpreter.ops,
             len(outcome["logs"]),
+            len(images),
             outcome["error"],
         )
-        return _clip(json.dumps(outcome, ensure_ascii=False, default=repr))
+        return _clip(json.dumps(outcome, ensure_ascii=False, default=repr)), images
     except Exception as error:
-        return f"Tool call failed, error: {error}"
+        return f"Tool call failed, error: {error}", []
 
 
 META_TOOLS = [search_tools, get_tool, run_tools]

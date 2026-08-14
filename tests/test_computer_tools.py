@@ -54,6 +54,7 @@ class ComputerToolTests(unittest.IsolatedAsyncioTestCase):
             [tool.name for tool in COMPUTER_TOOLS],
             [
                 "screen_locate",
+                "screen_screenshot",
                 "screen_mark",
                 "screen_click",
                 "screen_type",

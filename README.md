@@ -36,8 +36,10 @@
 After every response a dim footer reports what the turn cost:
 
 ```
-ctx 14,204/1,048,576 (1.4%) · turn 13,900 in + 304 out ($0.0058) · session 28,400 tokens ($0.0116)
+ctx █░░░░░░░░░░░░░░░░░░░ 14,204/1,048,576 (1.4%) · turn 13,900 in + 304 out ($0.0058) · session 28,400 tokens ($0.0116)
 ```
+
+The context bar is colored by fill: green below 70%, yellow below 90%, red above.
 
 That is: how full the current model's context window is, tokens and dollars
 for this turn, and session totals. Token counts come from the provider's
@@ -89,6 +91,19 @@ dunder access), enforces op/sleep/wall-clock/memory budgets, and returns
 `{result, logs, error}` to the model. Intermediate tool output stays inside
 the script; only what it `return`s or `print`s reaches the conversation.
 
+### Seeing the screen
+
+Base64 in a tool's text output is invisible to an LLM — providers only read
+images from `image_url` content blocks. So screenshot-capturing tools
+(`screen_screenshot`, `screen_locate` with `return_screen=True`) *attach*
+their image instead: it rides out of `run_tools` as the tool message's
+artifact, and a middleware injects it into the conversation as a proper
+vision message right after the tool result, so the model actually sees the
+picture. Raw base64 is still available (`screen_screenshot(return_base64=True)`,
+or automatically when the tools are used outside the agent). The
+LocateAnything vision model is preloaded in the background at startup so the
+first screen query doesn't pay the load time.
+
 ## Computer use
 
 `ComputerUse` (`src/tools/computer_use/`) combines a vision locator with mouse
@@ -101,6 +116,8 @@ from src.tools.computer_use import ComputerUse
 computer = ComputerUse()
 
 computer.get_screenshot()                       # capture the primary display
+computer.screenshot_base64()                    # base64 JPEG, downscaled to ≤1280px
+computer.annotated_base64()                     # last view with detection boxes drawn
 computer.locate_object("the render button")     # -> [Detection(label, box)]
 computer.locate_point("the render button")      # -> clickable (x, y)
 

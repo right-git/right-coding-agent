@@ -5,6 +5,7 @@ from langchain.agents.middleware import (
     LLMToolSelectorMiddleware,
     SummarizationMiddleware,
 )
+from .attachments import AttachedImagesMiddleware
 from .meta_tools import META_TOOLS
 from src.config.prompts import Prompts
 from .base import LLMClient
@@ -31,6 +32,9 @@ class Agents(LLMClient):
             tools=tools,
             thread_id=thread_id,
             middlewares=[
+                # Runs first so screenshots captured by tools become a vision
+                # message before summarization ever touches the tool tail.
+                AttachedImagesMiddleware(),
                 SummarizationMiddleware(
                     model=self.build_chat_model(
                         model_name="openai/gpt-4.1-mini",

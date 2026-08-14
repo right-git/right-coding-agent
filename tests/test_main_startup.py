@@ -16,7 +16,9 @@ class MainStartupTests(unittest.IsolatedAsyncioTestCase):
 
         with patch("src.main.ChatUI", return_value=ui), patch(
             "src.main.OpenRouterCatalog", return_value=catalog
-        ), patch("src.llm.agents.Agents") as agents_cls:
+        ), patch("src.main.preload_vision_model"), patch(
+            "src.llm.agents.Agents"
+        ) as agents_cls:
             agents_cls.return_value = Mock()
 
             with self.assertRaises(SystemExit):

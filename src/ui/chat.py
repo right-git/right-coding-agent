@@ -359,6 +359,22 @@ class ChatUI:
         )
         return None
 
+    @staticmethod
+    def _context_bar(used: int, limit: int, width: int = 20) -> str:
+        """A colored fill bar for context usage, green → yellow → red."""
+        ratio = min(1.0, used / limit) if limit > 0 else 0.0
+        filled = round(width * ratio)
+        if used > 0:
+            filled = max(filled, 1)
+        filled = min(filled, width)
+        if ratio < 0.7:
+            color = "green"
+        elif ratio < 0.9:
+            color = "yellow"
+        else:
+            color = "red"
+        return f"[{color}]{'█' * filled}[/]{'░' * (width - filled)}"
+
     def print_usage(
         self,
         turn: TurnUsage,
@@ -376,8 +392,9 @@ class ChatUI:
         limit = model_info.context_length if model_info else None
         if limit:
             percent = 100 * turn.context_tokens / limit
+            bar = self._context_bar(turn.context_tokens, limit)
             context_part = (
-                f"ctx {turn.context_tokens:,}/{limit:,} ({percent:.1f}%)"
+                f"ctx {bar} {turn.context_tokens:,}/{limit:,} ({percent:.1f}%)"
             )
         else:
             context_part = f"ctx {turn.context_tokens:,} (limit unknown)"
