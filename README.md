@@ -36,10 +36,13 @@
 After every response a dim footer reports what the turn cost:
 
 ```
-ctx █░░░░░░░░░░░░░░░░░░░ 14,204/1,048,576 (1.4%) · turn 13,900 in + 304 out ($0.0058) · session 28,400 tokens ($0.0116)
+ctx █░░░░░░░░░░░░░░░░░░░ 14,204/1,048,576 (1.4%) · turn 13,900 in + 304 out ($0.0058) · tools 2 (+5 in scripts) · session 28,400 tokens ($0.0116)
 ```
 
-The context bar is colored by fill: green below 70%, yellow below 90%, red above.
+The context bar is colored by fill: green below 70%, yellow below 90%, red
+above. `tools` counts the model's direct tool calls this turn, plus the
+registry tools its `run_tools` scripts invoked internally; the segment is
+omitted on turns that called no tools.
 
 That is: how full the current model's context window is, tokens and dollars
 for this turn, and session totals. Token counts come from the provider's
@@ -72,7 +75,8 @@ round-trip per call. Instead, only three meta tools are wired into the agent
 
 1. `search_tools("click button screen")` — keyword search over the tool
    registry (currently `web_search` plus the `screen_*` tools);
-2. `get_tool("screen_click")` — the full contract of one tool;
+2. `get_tool(["screen_click", "screen_type"])` — full contracts of one or
+   more tools in a single call;
 3. `run_tools(code)` — a Python-subset script, executed server-side by the
    sandboxed interpreter in `src/tools/base.py`, where registered tools are
    called by bare name:

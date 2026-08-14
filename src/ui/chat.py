@@ -122,7 +122,10 @@ class ChatUI:
         if name == "search_tools":
             return f"Search tools · {args.get('query', '')}", ""
         if name == "get_tool":
-            return f"Read tool docs · {args.get('name', '')}", ""
+            requested = args.get("names") or args.get("name") or ""
+            if isinstance(requested, list):
+                requested = ", ".join(str(item) for item in requested)
+            return f"Read tool docs · {requested}", ""
         if name == "run_tools":
             return "Run tools script", args.get("code", "")
 
@@ -428,13 +431,20 @@ class ChatUI:
             f" ({format_money(cost)})" if cost is not None else " (price unknown)"
         )
 
+        parts = [context_part, turn_part]
+
+        if turn.tool_calls or turn.script_tool_calls:
+            tools_part = f"tools {turn.tool_calls}"
+            if turn.script_tool_calls:
+                tools_part += f" (+{turn.script_tool_calls} in scripts)"
+            parts.append(tools_part)
+
         session_part = f"session {session.total_tokens:,} tokens"
         approx = "≈" if session.unpriced_turns else ""
         session_part += f" ({approx}{format_money(session.cost)})"
+        parts.append(session_part)
 
-        self.console.print(
-            f"  {context_part} · {turn_part} · {session_part}", style="info"
-        )
+        self.console.print("  " + " · ".join(parts), style="info")
 
     def _switch_log_level(self, level_name: str) -> str | None:
         try:

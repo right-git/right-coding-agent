@@ -2,7 +2,7 @@ import unittest
 from contextlib import nullcontext
 from unittest.mock import AsyncMock, Mock, patch
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from src.llm.openrouter import ModelInfo
 from src.llm.usage import SessionUsage
@@ -117,11 +117,24 @@ class UsageReportingTests(unittest.IsolatedAsyncioTestCase):
             AIMessage(
                 content="step",
                 id="new_1",
+                tool_calls=[
+                    {
+                        "name": "run_tools",
+                        "args": {"code": "return 1"},
+                        "id": "tc1",
+                        "type": "tool_call",
+                    }
+                ],
                 usage_metadata={
                     "input_tokens": 100,
                     "output_tokens": 20,
                     "total_tokens": 120,
                 },
+            ),
+            ToolMessage(
+                content='{"result": 1, "tool_calls": 4}',
+                tool_call_id="tc1",
+                name="run_tools",
             ),
             AIMessage(
                 content="done",
@@ -170,6 +183,8 @@ class UsageReportingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(turn.output_tokens, 50)
         self.assertEqual(turn.context_tokens, 160)
         self.assertEqual(turn.calls, 2)
+        self.assertEqual(turn.tool_calls, 1)
+        self.assertEqual(turn.script_tool_calls, 4)
         self.assertIs(model_info, info)
         self.assertAlmostEqual(cost, 230 * 7.5e-8 + 50 * 3e-7)
         self.assertIs(session_arg, session)

@@ -62,13 +62,15 @@ class ToolCallRenderTests(unittest.TestCase):
         ui.print_response(
             [
                 self.ai_with_call("search_tools", {"query": "click button"}),
-                self.ai_with_call("get_tool", {"name": "screen_click"}),
+                self.ai_with_call(
+                    "get_tool", {"names": ["screen_click", "screen_type"]}
+                ),
             ]
         )
 
         rendered = ui.console.export_text()
         self.assertIn("Search tools · click button", rendered)
-        self.assertIn("Read tool docs · screen_click", rendered)
+        self.assertIn("Read tool docs · screen_click, screen_type", rendered)
 
     def test_markup_like_content_does_not_break_rendering(self):
         ui = make_ui()

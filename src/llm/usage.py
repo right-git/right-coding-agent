@@ -7,10 +7,11 @@ the whole history, so input plus output of that call is what will occupy the
 window at the start of the next turn.
 """
 
+import json
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,8 @@ class TurnUsage:
     output_tokens: int = 0
     context_tokens: int = 0
     calls: int = 0
+    tool_calls: int = 0
+    script_tool_calls: int = 0
 
     @property
     def total_tokens(self) -> int:
@@ -32,25 +35,46 @@ def collect_message_ids(messages: Sequence) -> frozenset[str]:
     )
 
 
+def _embedded_tool_calls(content) -> int:
+    """The `tool_calls` count a run_tools result reports for its script."""
+    if not isinstance(content, str) or not content.startswith("{"):
+        return 0
+    try:
+        parsed = json.loads(content)
+    except ValueError:
+        return 0
+    value = parsed.get("tool_calls") if isinstance(parsed, dict) else None
+    return value if isinstance(value, int) and value > 0 else 0
+
+
 def turn_usage_from_messages(
     messages: Iterable,
     previous_ids: frozenset[str] = frozenset(),
 ) -> TurnUsage:
-    """Sum usage over the AI messages this turn produced.
+    """Sum usage over the messages this turn produced.
 
     `previous_ids` excludes history that came back in the response — old
-    AI messages keep their usage_metadata and would be double-counted.
+    messages keep their usage_metadata and would be double-counted.
+    `tool_calls` counts the model's direct calls; `script_tool_calls` sums
+    the registry-tool invocations run_tools results report for their scripts.
     """
     input_total = 0
     output_total = 0
     context = 0
     calls = 0
+    tool_calls = 0
+    script_tool_calls = 0
 
     for message in messages:
+        identifier = getattr(message, "id", None)
+        if identifier and identifier in previous_ids:
+            continue
+        if isinstance(message, ToolMessage):
+            script_tool_calls += _embedded_tool_calls(message.content)
+            continue
         if not isinstance(message, AIMessage):
             continue
-        if message.id and message.id in previous_ids:
-            continue
+        tool_calls += len(message.tool_calls or [])
         usage = getattr(message, "usage_metadata", None)
         if not usage:
             continue
@@ -66,6 +90,8 @@ def turn_usage_from_messages(
         output_tokens=output_total,
         context_tokens=context,
         calls=calls,
+        tool_calls=tool_calls,
+        script_tool_calls=script_tool_calls,
     )
 
 

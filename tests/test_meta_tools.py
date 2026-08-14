@@ -168,13 +168,40 @@ class MetaToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("job_status", result)
 
     async def test_get_tool_returns_the_contract(self):
-        result = await get_tool.ainvoke({"name": "fetch_page"})
+        result = await get_tool.ainvoke({"names": ["fetch_page"]})
 
         self.assertIn("Argument schema:", result)
         self.assertIn("Address of the page.", result)
 
+    async def test_get_tool_returns_several_contracts_in_one_call(self):
+        result = await get_tool.ainvoke({"names": ["fetch_page", "job_status"]})
+
+        self.assertIn("fetch_page(url, timeout=5)", result)
+        self.assertIn("job_status(job_id)", result)
+        self.assertIn("\n\n---\n\n", result)
+        self.assertLess(result.index("fetch_page("), result.index("job_status("))
+
+    async def test_get_tool_mixes_contracts_and_suggestions(self):
+        result = await get_tool.ainvoke({"names": ["fetch_page", "nope"]})
+
+        self.assertIn("Argument schema:", result)
+        self.assertIn("Unknown tool: 'nope'", result)
+
+    async def test_get_tool_accepts_a_loose_string_and_dedupes(self):
+        result = await get_tool.ainvoke(
+            {"names": "fetch_page, job_status fetch_page"}
+        )
+
+        self.assertEqual(result.count("fetch_page(url, timeout=5)"), 1)
+        self.assertIn("job_status(job_id)", result)
+
+    async def test_get_tool_without_names_points_to_search(self):
+        result = await get_tool.ainvoke({"names": []})
+
+        self.assertIn("search_tools", result)
+
     async def test_get_tool_suggests_names_for_unknown_tools(self):
-        result = await get_tool.ainvoke({"name": "fetch"})
+        result = await get_tool.ainvoke({"names": ["fetch"]})
 
         self.assertIn("Unknown tool: 'fetch'", result)
         self.assertIn("fetch_page", result)
@@ -195,6 +222,13 @@ class MetaToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(outcome["error"])
         self.assertEqual(outcome["result"], ["PAGE:A:5", "PAGE:B:9"])
         self.assertEqual(outcome["logs"], ["2"])
+        self.assertEqual(outcome["tool_calls"], 2)
+
+    async def test_run_tools_omits_the_tool_count_when_nothing_was_called(self):
+        outcome = json.loads(await run_tools.ainvoke({"code": "return 1 + 1"}))
+
+        self.assertEqual(outcome["result"], 2)
+        self.assertNotIn("tool_calls", outcome)
 
     async def test_run_tools_polls_with_sleep_until_done(self):
         outcome = json.loads(

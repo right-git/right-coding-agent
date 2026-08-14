@@ -61,6 +61,48 @@ class TurnUsageTests(unittest.TestCase):
 
         self.assertEqual(ids, frozenset({"a"}))
 
+    def test_direct_tool_calls_are_counted_even_without_usage(self):
+        usage = turn_usage_from_messages(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {"name": "run_tools", "args": {}, "id": "c1", "type": "tool_call"},
+                        {"name": "search_tools", "args": {}, "id": "c2", "type": "tool_call"},
+                    ],
+                )
+            ]
+        )
+
+        self.assertEqual(usage.tool_calls, 2)
+        self.assertEqual(usage.calls, 0)
+
+    def test_script_tool_calls_come_from_run_tools_json(self):
+        usage = turn_usage_from_messages(
+            [
+                ToolMessage(
+                    content='{"result": "ok", "tool_calls": 5}',
+                    tool_call_id="c1",
+                ),
+                ToolMessage(content="plain text result", tool_call_id="c2"),
+                ToolMessage(content='{"result": "ok"}', tool_call_id="c3"),
+            ]
+        )
+
+        self.assertEqual(usage.script_tool_calls, 5)
+
+    def test_history_tool_messages_are_excluded_by_id(self):
+        old = ToolMessage(
+            content='{"tool_calls": 9}', tool_call_id="c0", id="old"
+        )
+
+        usage = turn_usage_from_messages(
+            [old, ToolMessage(content='{"tool_calls": 2}', tool_call_id="c1")],
+            frozenset({"old"}),
+        )
+
+        self.assertEqual(usage.script_tool_calls, 2)
+
 
 class SessionUsageTests(unittest.TestCase):
     def test_accumulates_tokens_and_priced_costs(self):

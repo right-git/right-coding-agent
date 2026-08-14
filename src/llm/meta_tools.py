@@ -10,7 +10,10 @@ the script returns or prints enters the conversation.
 """
 
 import json
+import re
 from collections.abc import Awaitable, Callable, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from langchain_core.tools import BaseTool, tool
@@ -41,6 +44,24 @@ RESERVED_SCRIPT_NAMES = frozenset({
 })
 
 
+# Counts registry-tool invocations made by the script of the current
+# run_tools call, so the run's result (and the usage footer) can report them.
+_script_call_counter: ContextVar[list[int] | None] = ContextVar(
+    "script_tool_calls", default=None
+)
+
+
+@contextmanager
+def counting_script_calls():
+    """Open a tool-call counter for one run_tools call and yield it."""
+    counter = [0]
+    token = _script_call_counter.set(counter)
+    try:
+        yield counter
+    finally:
+        _script_call_counter.reset(token)
+
+
 def _as_script_callable(
     tool_obj: BaseTool,
 ) -> Callable[..., Awaitable[Any]]:
@@ -53,6 +74,9 @@ def _as_script_callable(
     field_names = list(tool_obj.args)
 
     async def call(*args: Any, **kwargs: Any) -> Any:
+        counter = _script_call_counter.get()
+        if counter is not None:
+            counter[0] += 1
         if len(args) > len(field_names):
             raise TypeError(
                 f"{tool_obj.name}() takes at most {len(field_names)} "
@@ -212,36 +236,58 @@ async def search_tools(query: str) -> str:
             [
                 header,
                 *(registry.brief(match) for match in matches),
-                "Read a tool's full contract with get_tool before calling "
-                "it in run_tools.",
+                "Fetch full contracts with get_tool — it takes several "
+                "names at once — before calling them in run_tools.",
             ]
         )
     except Exception as error:
         return f"Tool call failed, error: {error}"
 
 
-@tool(parse_docstring=True, return_direct=False)
-async def get_tool(name: str) -> str:
-    """Full contract of one tool: description, arguments, usage.
+def _normalize_tool_names(names: list[str] | str) -> list[str]:
+    """A clean, deduplicated name list from either a list or a loose string."""
+    if isinstance(names, str):
+        names = [part for part in re.split(r"[,\s]+", names) if part]
+    cleaned = [name.strip() for name in names if name and name.strip()]
+    return list(dict.fromkeys(cleaned))
 
-    Read this before the first call to a tool found via search_tools, so
-    your run_tools script passes the right arguments.
+
+@tool(parse_docstring=True, return_direct=False)
+async def get_tool(names: list[str] | str) -> str:
+    """Full contracts of one or more tools: description, arguments, usage.
+
+    Read this before the first call to tools found via search_tools, so your
+    run_tools script passes the right arguments. Request every tool you plan
+    to use in a single call instead of calling once per tool.
 
     Args:
-        name: Exact tool name as returned by search_tools.
+        names: Exact tool names as returned by search_tools, for example
+            ["screen_locate", "screen_click"].
 
     Returns:
-        The tool's signature, documentation, and argument schema, or the
-        closest registered names when no such tool exists.
+        The signature, documentation, and argument schema of every requested
+        tool, in order. Unknown names get the closest registered names
+        instead.
     """
     try:
         registry = get_registry()
-        documentation = registry.document(name)
-        if documentation is not None:
-            return documentation
-        suggestions = registry.search(name) or registry.all_tools()
-        listed = "\n".join(registry.brief(match) for match in suggestions)
-        return f"Unknown tool: {name!r}. Closest matches:\n{listed}"
+        requested = _normalize_tool_names(names)
+        if not requested:
+            return "No tool names given. Find tools with search_tools first."
+
+        sections = []
+        for name in requested:
+            documentation = registry.document(name)
+            if documentation is None:
+                suggestions = registry.search(name) or registry.all_tools()
+                listed = "\n".join(
+                    registry.brief(match) for match in suggestions
+                )
+                documentation = (
+                    f"Unknown tool: {name!r}. Closest matches:\n{listed}"
+                )
+            sections.append(documentation)
+        return "\n\n---\n\n".join(sections)
     except Exception as error:
         return f"Tool call failed, error: {error}"
 
@@ -299,17 +345,21 @@ async def run_tools(code: str) -> tuple[str, list[dict]]:
     try:
         registry = get_registry()
         interpreter = Interpreter(registry.callables())
-        with collecting_images() as images:
+        with collecting_images() as images, counting_script_calls() as calls:
             outcome = await interpreter.run(code)
         if len(images) > MAX_ATTACHED_IMAGES:
             outcome["dropped_images"] = len(images) - MAX_ATTACHED_IMAGES
             del images[:-MAX_ATTACHED_IMAGES]
         if images:
             outcome["attached_images"] = len(images)
+        if calls[0]:
+            outcome["tool_calls"] = calls[0]
         logger.info(
-            "run_tools finished ops [{}] logs [{}] images [{}] error [{}]",
+            "run_tools finished ops [{}] logs [{}] tool_calls [{}] "
+            "images [{}] error [{}]",
             interpreter.ops,
             len(outcome["logs"]),
+            calls[0],
             len(images),
             outcome["error"],
         )

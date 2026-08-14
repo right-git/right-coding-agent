@@ -114,7 +114,12 @@ class UsageFooterTests(unittest.TestCase):
         ui = make_ui()
         session = SessionUsage()
         turn = TurnUsage(
-            input_tokens=13_900, output_tokens=304, context_tokens=14_204, calls=2
+            input_tokens=13_900,
+            output_tokens=304,
+            context_tokens=14_204,
+            calls=2,
+            tool_calls=2,
+            script_tool_calls=5,
         )
         session.add(turn, 0.0012)
 
@@ -124,7 +129,20 @@ class UsageFooterTests(unittest.TestCase):
         self.assertIn("14,204/1,048,576 (1.4%)", rendered)
         self.assertIn("█" + "░" * 19, rendered)
         self.assertIn("turn 13,900 in + 304 out ($0.0012)", rendered)
+        self.assertIn("tools 2 (+5 in scripts)", rendered)
         self.assertIn("session 14,204 tokens ($0.0012)", rendered)
+
+    def test_footer_omits_the_tools_segment_when_none_were_called(self):
+        ui = make_ui()
+        session = SessionUsage()
+        turn = TurnUsage(
+            input_tokens=100, output_tokens=10, context_tokens=110, calls=1
+        )
+        session.add(turn, 0.001)
+
+        ui.print_usage(turn, GEMINI, 0.001, session)
+
+        self.assertNotIn("tools", ui.console.export_text())
 
     def test_context_bar_fills_and_changes_color_with_usage(self):
         ui = make_ui()
