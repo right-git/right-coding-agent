@@ -11,11 +11,16 @@ from src.llm.usage import (
     turn_usage_from_messages,
 )
 from src.ui import ChatUI
-from src.utils.functions import trim_incomplete_tool_calls
+from src.utils.functions import is_empty_final_response, trim_incomplete_tool_calls
 
 available_models = [
     "google/gemini-3.7-flash",
 ]
+
+EMPTY_RESPONSE_NUDGE = (
+    "Your last message was empty. Continue: finish the remaining steps of "
+    "the task, or state what you found and what is still missing."
+)
 
 
 def preload_vision_model() -> None:
@@ -102,6 +107,34 @@ async def process_user_turn(
                 model=model,
             )
         raw_messages = response["messages"]
+
+        if is_empty_final_response(raw_messages):
+            # Seen with Gemini via OpenRouter: a "successful" completion with
+            # no text, no tool calls, zero usage. Drop it and nudge once.
+            logger.warning(
+                "Model returned an empty final response model [{}]; "
+                "nudging once to continue",
+                model,
+            )
+            retry_messages = [
+                *raw_messages[:-1],
+                HumanMessage(EMPTY_RESPONSE_NUDGE),
+            ]
+            with ui.loading("thinking"):
+                response = await agents.right_coding_agent(
+                    messages=retry_messages,
+                    model=model,
+                )
+            raw_messages = response["messages"]
+            if is_empty_final_response(raw_messages):
+                logger.warning(
+                    "Model returned an empty final response twice model [{}]",
+                    model,
+                )
+                ui.print_warning(
+                    "model ended the turn with an empty response twice"
+                )
+
         trimmed_messages = trim_incomplete_tool_calls(raw_messages)
         new_messages = trimmed_messages[shown_count:]
         visible_output = ui.has_visible_output(new_messages)

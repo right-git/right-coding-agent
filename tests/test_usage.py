@@ -46,6 +46,22 @@ class TurnUsageTests(unittest.TestCase):
         self.assertEqual(usage.input_tokens, 100)
         self.assertEqual(usage.calls, 1)
 
+    def test_zero_usage_final_call_keeps_the_previous_context(self):
+        aborted = AIMessage(
+            content="",
+            id="aborted",
+            usage_metadata={
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+            },
+        )
+
+        usage = turn_usage_from_messages([ai("a", 100, 20), aborted])
+
+        self.assertEqual(usage.context_tokens, 120)
+        self.assertEqual(usage.calls, 2)
+
     def test_messages_without_usage_metadata_are_skipped(self):
         usage = turn_usage_from_messages(
             [

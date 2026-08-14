@@ -27,6 +27,14 @@
    uv run python -m src.main
    ```
 
+## Architecture evaluation
+
+`evaluation/` holds a control-group agent for measuring the meta-tool
+architecture: the same agent with every tool schema wired directly into the
+model (`uv run python -m evaluation.main`). Give the same task to it and to
+the production agent, then compare the usage footers — see
+`evaluation/README.md` for the methodology.
+
 ## Chat commands and usage footer
 
 - `/models` — list models with their context window and $/M pricing (metadata from the public OpenRouter API);
@@ -163,6 +171,14 @@ computer.click_object("the render button", region=panel.box)
 Repeating a query while the screen has not changed is served from cache without
 touching the model. Decoding is greedy: on queries the model is unsure about,
 sampling returned five different boxes in five runs.
+
+Detection reports include a coarse position per match (`at top-left`,
+`at bottom-center`), and the agent-facing `screen_click` / `screen_mark`
+tools refuse to act on an ambiguous description ("the input field" on a
+screen with an address bar *and* a search box): they list the candidates
+with positions and require either a more concrete description or an explicit
+`match=<n>` pick — which is deterministic, because the unchanged screen is
+served from cache in the same order.
 
 Module layout:
 

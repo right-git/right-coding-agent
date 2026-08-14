@@ -127,6 +127,7 @@ class MessageLogMiddlewareTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(len(lines), 1)
         payload = json.loads(lines[0])
+        self.assertEqual(payload["event"], "model_request")
         self.assertEqual(payload["message_count"], 4)
 
         human, ai, tool, vision = payload["messages"]
@@ -139,6 +140,43 @@ class MessageLogMiddlewareTests(unittest.TestCase):
             vision["content"][1]["image_url"]["url"],
             f"<data-uri stripped, {23 + 5000} chars>",
         )
+
+    def test_logs_the_model_response_with_finish_reason(self):
+        lines = []
+        middleware = MessageLogMiddleware(emit=lines.append)
+        response = AIMessage(
+            content="",
+            response_metadata={"finish_reason": "stop", "model_name": "gemini"},
+            usage_metadata={
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+            },
+        )
+
+        result = middleware.after_model(
+            {"messages": [HumanMessage("hi"), response]}
+        )
+
+        self.assertIsNone(result)
+        payload = json.loads(lines[0])
+        self.assertEqual(payload["event"], "model_response")
+        self.assertEqual(
+            payload["message"]["response_metadata"]["finish_reason"], "stop"
+        )
+        self.assertEqual(
+            payload["message"]["usage"],
+            {"input_tokens": 0, "output_tokens": 0},
+        )
+
+    def test_response_logging_skips_non_ai_tails(self):
+        lines = []
+        middleware = MessageLogMiddleware(emit=lines.append)
+
+        middleware.after_model({"messages": [HumanMessage("hi")]})
+        middleware.after_model({"messages": []})
+
+        self.assertEqual(lines, [])
 
     def test_logging_failures_never_propagate(self):
         def explode(_line):

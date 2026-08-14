@@ -163,6 +163,29 @@ def select_targets(
     raise ValueError(f"Unsupported target mode: {mode}")
 
 
+def position_label(center: Point, image_size: Size) -> str:
+    """Coarse position of a point on screen: "top-left" … "bottom-right".
+
+    Reports include it so matches can be told apart, and refined queries can
+    be phrased the way people talk about a screen.
+    """
+    x, y = center
+    width, height = image_size
+    if x < width / 3:
+        column = "left"
+    elif x < 2 * width / 3:
+        column = "center"
+    else:
+        column = "right"
+    if y < height / 3:
+        row = "top"
+    elif y < 2 * height / 3:
+        row = "middle"
+    else:
+        row = "bottom"
+    return f"{row}-{column}"
+
+
 def describe_detections(
     detections: Sequence[Detection], image_size: Size
 ) -> str:
@@ -175,6 +198,7 @@ def describe_detections(
         center = box_center(detection.box, image_size)
         lines.append(
             f"{index}. {detection.label}: "
-            f"box={detection.box}, center={center}"
+            f"box={detection.box}, center={center}, "
+            f"at {position_label(center, image_size)}"
         )
     return "\n".join(lines)

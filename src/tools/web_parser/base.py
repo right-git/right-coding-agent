@@ -126,17 +126,30 @@ class WebParser:
             else RuntimeError("make_request failed unexpectedly")
         )
 
+    @staticmethod
+    def _as_content_text(result: Any) -> str:
+        """Whatever the markdown converter returned, as plain text.
+
+        `html_to_markdown.convert` returns a plain string in some versions
+        and a `{"content": ...}` mapping in others; callers get a string
+        either way.
+        """
+        if isinstance(result, dict):
+            content = result.get("content")
+            return content if isinstance(content, str) else ""
+        return result if isinstance(result, str) else str(result or "")
+
     def parse_html(
         self, html: str, metadata_primary: bool = False
     ) -> dict[str, Any] | str:
         soup = BeautifulSoup(html, "html.parser")
         has_description_meta = any(
-            meta.get("name", "").lower() == "description"
+            str(meta.get("name") or "").lower() == "description"
             for meta in soup.find_all("meta")
         )
 
         for meta in soup.find_all("meta"):
-            if meta.get("name", "").lower() != "description":
+            if str(meta.get("name") or "").lower() != "description":
                 meta.decompose()
 
         result = convert(soup.prettify(), options=ConversionOptions(skip_images=True))
@@ -153,9 +166,25 @@ class WebParser:
         return result
 
     async def parse_page(self, url: str) -> str:
+        """The page at `url` as Markdown text; always a string.
+
+        Some pages crash the HTML→Markdown converter; those fall back to the
+        page's plain text rather than failing the whole fetch.
+        """
         response = await self.make_request(url)
         html = response.text if hasattr(response, "text") else str(response.content)
-        result = self.parse_html(html)
-        return result
+        try:
+            result = self.parse_html(html)
+        except Exception as error:
+            logger.warning(
+                "Markdown conversion failed for [{}]: {}; "
+                "falling back to plain text",
+                url,
+                error,
+            )
+            result = BeautifulSoup(html, "html.parser").get_text(
+                " ", strip=True
+            )
+        return self._as_content_text(result)
 
     

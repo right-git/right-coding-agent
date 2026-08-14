@@ -82,8 +82,11 @@ def turn_usage_from_messages(
         output_tokens = int(usage.get("output_tokens", 0) or 0)
         input_total += input_tokens
         output_total += output_tokens
-        context = input_tokens + output_tokens
         calls += 1
+        # An aborted/empty completion reports zero usage; keep the last real
+        # call's figure instead of showing an impossible "ctx 0".
+        if input_tokens + output_tokens > 0:
+            context = input_tokens + output_tokens
 
     return TurnUsage(
         input_tokens=input_total,

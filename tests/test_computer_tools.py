@@ -74,7 +74,9 @@ class ComputerToolTests(unittest.IsolatedAsyncioTestCase):
 
         result = await screen_locate.ainvoke({"description": "save button"})
 
-        self.assertEqual(result, "1. save: box=(10, 20, 30, 40), center=(20, 30)")
+        self.assertEqual(
+            result, "1. save: box=(10, 20, 30, 40), center=(20, 30), at top-left"
+        )
 
     async def test_locate_reports_when_nothing_matches(self):
         self.install([[]])
@@ -138,6 +140,69 @@ class ComputerToolTests(unittest.IsolatedAsyncioTestCase):
         await screen_click.ainvoke({"description": "file", "double": True})
 
         self.assertEqual(self.pointer.clicks, [("left", 2, ())])
+
+    def install_two_inputs(self):
+        return self.install(
+            [
+                [
+                    Detection("address bar", (10, 5, 190, 15)),
+                    Detection("search field", (50, 60, 150, 80)),
+                ]
+            ]
+        )
+
+    async def test_click_refuses_ambiguous_descriptions(self):
+        self.install_two_inputs()
+
+        result = await screen_click.ainvoke({"description": "input field"})
+
+        self.assertIn("Did not click: 2 elements matched", result)
+        self.assertIn("match=<number>", result)
+        self.assertIn("at top-center", result)
+        self.assertIn("at bottom-center", result)
+        self.assertEqual(self.pointer.clicks, [])
+
+    async def test_click_match_picks_one_of_several(self):
+        self.install_two_inputs()
+
+        result = await screen_click.ainvoke(
+            {"description": "input field", "match": 2}
+        )
+
+        self.assertIn("Clicked 'search field'", result)
+        self.assertEqual(self.pointer.clicks, [("left", 1, ())])
+        self.assertEqual(self.pointer.moves[-1], (100, 70))
+
+    async def test_click_match_out_of_range_lists_candidates(self):
+        self.install_two_inputs()
+
+        result = await screen_click.ainvoke(
+            {"description": "input field", "match": 5}
+        )
+
+        self.assertIn("match=5 is out of range", result)
+        self.assertIn("address bar", result)
+        self.assertEqual(self.pointer.clicks, [])
+
+    async def test_mark_refuses_ambiguous_descriptions(self):
+        self.install_two_inputs()
+
+        result = await screen_mark.ainvoke(
+            {"description": "input field", "note": "n"}
+        )
+
+        self.assertIn("Did not mark: 2 elements matched", result)
+        self.assertEqual(self.overlay.markers, [])
+
+    async def test_mark_match_picks_one_of_several(self):
+        self.install_two_inputs()
+
+        result = await screen_mark.ainvoke(
+            {"description": "input field", "note": "n", "match": 1}
+        )
+
+        self.assertIn("Marked 'address bar'", result)
+        self.assertEqual(self.overlay.markers[0].title, "address bar")
 
     async def test_typing_scrolling_and_shortcuts_reach_the_pointer(self):
         self.install([[]])

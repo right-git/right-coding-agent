@@ -4,13 +4,14 @@ from src.tools.web_parser import WebParser
 
 @tool(parse_docstring=True, return_direct=False)
 async def web_search(url: str) -> str:
-    """Parse webpage and get information.
+    """Fetch a web page and return its content as Markdown text.
 
     Args:
-        url: URL of the webpage to parse.
+        url: URL of the webpage to fetch.
 
     Returns:
-        Parsed content of the webpage.
+        The page converted to Markdown, as one plain string — slice it,
+        search it, or measure it with len().
     """
     try:
         web_parser = WebParser()

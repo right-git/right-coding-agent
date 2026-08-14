@@ -468,8 +468,8 @@ class InteractiveLoopTests(unittest.TestCase):
         )
 
         output.assert_any_call(
-            "1. button: box=(10, 20, 30, 40), center=(20, 30)\n"
-            "2. icon: box=(50, 60, 90, 100), center=(70, 80)"
+            "1. button: box=(10, 20, 30, 40), center=(20, 30), at top-left\n"
+            "2. icon: box=(50, 60, 90, 100), center=(70, 80), at bottom-right"
         )
 
     def test_invalid_mode_command_keeps_default_first_mode(self):

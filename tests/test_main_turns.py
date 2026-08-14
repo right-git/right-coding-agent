@@ -6,7 +6,8 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from src.llm.openrouter import ModelInfo
 from src.llm.usage import SessionUsage
-from src.main import process_user_turn
+from src.main import EMPTY_RESPONSE_NUDGE, process_user_turn
+from src.utils.functions import is_empty_final_response
 
 
 class ProcessUserTurnTests(unittest.IsolatedAsyncioTestCase):
@@ -96,6 +97,102 @@ class ProcessUserTurnTests(unittest.IsolatedAsyncioTestCase):
         ui.print_response.assert_called_once_with([AIMessage(content="done")])
         ui.print_warning.assert_not_called()
         ui.print_error.assert_not_called()
+
+
+class EmptyFinalResponseTests(unittest.TestCase):
+    def test_empty_or_whitespace_text_is_empty(self):
+        self.assertTrue(is_empty_final_response([AIMessage(content="")]))
+        self.assertTrue(is_empty_final_response([AIMessage(content="  \n")]))
+
+    def test_blocks_without_text_are_empty(self):
+        message = AIMessage(
+            content=[{"type": "text", "text": ""}, {"type": "reasoning", "summary": []}]
+        )
+        self.assertTrue(is_empty_final_response([message]))
+
+    def test_text_or_reasoning_summaries_are_not_empty(self):
+        self.assertFalse(is_empty_final_response([AIMessage(content="done")]))
+        self.assertFalse(
+            is_empty_final_response(
+                [AIMessage(content=[{"type": "reasoning", "summary": [{"text": "thought"}]}])]
+            )
+        )
+
+    def test_tool_calls_and_non_ai_tails_are_not_empty(self):
+        with_tools = AIMessage(
+            content="",
+            tool_calls=[{"name": "run_tools", "args": {}, "id": "c1", "type": "tool_call"}],
+        )
+        self.assertFalse(is_empty_final_response([with_tools]))
+        self.assertFalse(is_empty_final_response([HumanMessage("hi")]))
+        self.assertFalse(is_empty_final_response([]))
+
+
+class EmptyResponseRetryTests(unittest.IsolatedAsyncioTestCase):
+    def make_ui(self):
+        ui = Mock()
+        ui.loading.return_value = nullcontext()
+        ui.has_visible_output.return_value = True
+        return ui
+
+    async def test_empty_final_response_is_retried_with_a_nudge(self):
+        empty_response = {
+            "messages": [HumanMessage("test"), AIMessage(content="", id="empty")]
+        }
+        good_response = {
+            "messages": [
+                HumanMessage("test"),
+                HumanMessage(EMPTY_RESPONSE_NUDGE),
+                AIMessage(content="done", id="final"),
+            ]
+        }
+        agents = Mock()
+        agents.right_coding_agent = AsyncMock(
+            side_effect=[empty_response, good_response]
+        )
+        ui = self.make_ui()
+
+        with patch("src.main.logger"):
+            updated = await process_user_turn(
+                agents=agents,
+                ui=ui,
+                messages=[],
+                model="google/gemini-3.7-flash",
+                user_content="test",
+            )
+
+        self.assertEqual(agents.right_coding_agent.await_count, 2)
+        retry_messages = agents.right_coding_agent.await_args_list[1].kwargs[
+            "messages"
+        ]
+        self.assertEqual(retry_messages[-1], HumanMessage(EMPTY_RESPONSE_NUDGE))
+        self.assertNotIn(
+            "empty", [getattr(m, "id", None) for m in retry_messages]
+        )
+        self.assertEqual(updated[-1], AIMessage(content="done", id="final"))
+        ui.print_warning.assert_not_called()
+
+    async def test_two_empty_responses_surface_a_warning(self):
+        empty_response = {
+            "messages": [HumanMessage("test"), AIMessage(content="")]
+        }
+        agents = Mock()
+        agents.right_coding_agent = AsyncMock(
+            side_effect=[empty_response, empty_response]
+        )
+        ui = self.make_ui()
+
+        with patch("src.main.logger"):
+            await process_user_turn(
+                agents=agents,
+                ui=ui,
+                messages=[],
+                model="google/gemini-3.7-flash",
+                user_content="test",
+            )
+
+        self.assertEqual(agents.right_coding_agent.await_count, 2)
+        ui.print_warning.assert_called_once()
 
 
 class UsageReportingTests(unittest.IsolatedAsyncioTestCase):

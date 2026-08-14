@@ -77,7 +77,8 @@ def serialize_message(message: Any, max_chars: int = MAX_TEXT_CHARS) -> dict:
 
 
 class MessageLogMiddleware(AgentMiddleware):
-    """Log the messages sent to the model, as one JSON line per call."""
+    """Log model traffic as JSON lines: the request before every call, the
+    response — including its finish_reason — after it."""
 
     def __init__(
         self,
@@ -89,14 +90,13 @@ class MessageLogMiddleware(AgentMiddleware):
         super().__init__()
         self.max_text_chars = max_text_chars
         self.level = level
-        self._emit = emit or (
-            lambda line: logger.log(self.level, "model_request {}", line)
-        )
+        self._emit = emit or (lambda line: logger.log(self.level, "{}", line))
 
     def before_model(self, state, runtime=None) -> None:
         try:
             messages = state["messages"]
             payload = {
+                "event": "model_request",
                 "message_count": len(messages),
                 "messages": [
                     serialize_message(message, self.max_text_chars)
@@ -106,4 +106,20 @@ class MessageLogMiddleware(AgentMiddleware):
             self._emit(json.dumps(payload, ensure_ascii=False, default=repr))
         except Exception:
             logger.exception("Failed to log the model request")
+        return None
+
+    def after_model(self, state, runtime=None) -> None:
+        try:
+            messages = state["messages"]
+            last = messages[-1] if messages else None
+            if not isinstance(last, AIMessage):
+                return None
+            entry = serialize_message(last, self.max_text_chars)
+            metadata = getattr(last, "response_metadata", None)
+            if metadata:
+                entry["response_metadata"] = scrub(metadata, self.max_text_chars)
+            payload = {"event": "model_response", "message": entry}
+            self._emit(json.dumps(payload, ensure_ascii=False, default=repr))
+        except Exception:
+            logger.exception("Failed to log the model response")
         return None

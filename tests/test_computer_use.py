@@ -8,7 +8,24 @@ from PIL import Image
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src.tools.computer_use import ComputerUse, Detection, NullOverlay
+from src.tools.computer_use import (
+    ComputerUse,
+    Detection,
+    NullOverlay,
+    position_label,
+)
+
+
+class PositionLabelTests(unittest.TestCase):
+    def test_thirds_grid_maps_to_row_column_names(self):
+        size = (300, 300)
+
+        self.assertEqual(position_label((10, 10), size), "top-left")
+        self.assertEqual(position_label((150, 150), size), "middle-center")
+        self.assertEqual(position_label((290, 290), size), "bottom-right")
+        self.assertEqual(position_label((290, 10), size), "top-right")
+        self.assertEqual(position_label((10, 290), size), "bottom-left")
+        self.assertEqual(position_label((150, 290), size), "bottom-center")
 from src.tools.computer_use.clipboard import MemoryClipboard
 from src.tools.computer_use.fakes import (
     RecordingPointer,
@@ -458,7 +475,7 @@ class ComputerUseTests(unittest.TestCase):
 
         self.assertEqual(
             computer.describe(),
-            "1. save: box=(10, 20, 30, 40), center=(20, 30)",
+            "1. save: box=(10, 20, 30, 40), center=(20, 30), at top-left",
         )
 
     def test_describe_without_detections_says_so(self):

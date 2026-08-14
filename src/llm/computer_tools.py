@@ -33,6 +33,34 @@ def warm_up_computer() -> None:
         load()
 
 
+def _resolve_match(computer, description, detections, match, *, action):
+    """Pick exactly one detection, or explain why nothing will be done.
+
+    A vague description often matches several elements (every screen has
+    many "input fields"); acting on the first one silently clicks the wrong
+    thing. Callers act only on a unique match or an explicit `match` pick.
+    """
+    if not detections:
+        return None, f"Nothing on screen matched: {description}"
+    if match:
+        if not 1 <= match <= len(detections):
+            return None, (
+                f"match={match} is out of range — {len(detections)} "
+                f"element(s) matched {description!r}:\n"
+                f"{computer.describe(detections)}"
+            )
+        return detections[match - 1], ""
+    if len(detections) > 1:
+        return None, (
+            f"Did not {action}: {len(detections)} elements matched "
+            f"{description!r}. Refine the description — say where the "
+            f"element sits and what is around it — or call again with "
+            f"match=<number> to pick one of:\n"
+            f"{computer.describe(detections)}"
+        )
+    return detections[0], ""
+
+
 @tool(parse_docstring=True, return_direct=False)
 async def screen_locate(description: str, return_screen: bool = False) -> str:
     """Find where something is on the user's screen right now.
@@ -42,16 +70,20 @@ async def screen_locate(description: str, return_screen: bool = False) -> str:
     answering or acting. Takes a fresh screenshot on every call.
 
     Args:
-        description: What to look for, in plain language, for example
-            "the render button in the export panel".
+        description: What to look for, in plain language. Be concrete — name
+            the element type, its text or icon, and WHERE it sits ("the URL
+            address bar at the very top of the browser window", not "the
+            input field" — a screen usually has several inputs and a vague
+            query matches all of them).
         return_screen: Also capture the screen with every match outlined and
             attach it to the conversation, so you can see the layout instead
             of only coordinates.
 
     Returns:
-        Every match with its bounding box and clickable center, or a note that
-        nothing matched. With return_screen the annotated screenshot is
-        attached as an image you can see.
+        Every match with its bounding box, clickable center, and coarse
+        position (top-left … bottom-right), or a note that nothing matched.
+        With return_screen the annotated screenshot is attached as an image
+        you can see.
     """
     try:
         computer = get_computer()
@@ -106,36 +138,55 @@ async def screen_screenshot(return_base64: bool = False, max_side: int = 1280) -
 
 
 @tool(parse_docstring=True, return_direct=False)
-async def screen_mark(description: str, note: str, title: str = "") -> str:
+async def screen_mark(
+    description: str, note: str, title: str = "", match: int = 0
+) -> str:
     """Show the user where an element is, without clicking it.
 
     Call this when the user cannot find something ("where is the render
     button?", "I don't see the export option"). It moves the mouse onto the
     element, outlines it, and shows a tooltip next to the cursor with your
     explanation. Prefer this over clicking when the user asked *where*
-    something is rather than asking you to do it.
+    something is rather than asking you to do it. When several elements
+    match the description, nothing is marked — the candidates are listed so
+    you can refine the description or pick one.
 
     Args:
-        description: The element to point at, in plain language. This is the
-            search query, so describe the element and where it sits.
+        description: The element to point at, in plain language. Be concrete
+            enough to match exactly one element — its type, its text or
+            icon, and where it sits ("the search field in the middle of the
+            page", not "the input field").
         note: Short explanation shown to the user: what the element is and what
             happens when it is used.
         title: Heading shown above the note, a few words in the user's
             language, such as "Кнопка Render". Always set this — without it the
             heading falls back to the whole search query, which reads badly.
+        match: 1-based number of the candidate to mark when a previous call
+            listed several matches for the same description. Leave 0 when
+            the description should match uniquely.
 
     Returns:
-        Confirmation with the marked label and screen coordinates.
+        Confirmation with the marked label and screen coordinates; the
+        candidate list when the description was ambiguous; or a note that
+        nothing matched.
     """
     try:
         computer = get_computer()
-        detection = await asyncio.to_thread(
-            lambda: computer.mark_object(description, note, title=title or None)
+        detections = await asyncio.to_thread(
+            computer.locate_object, description
         )
-        if detection is None:
-            return f"Nothing on screen matched: {description}"
+        target, report = _resolve_match(
+            computer, description, detections, match, action="mark"
+        )
+        if target is None:
+            return report
+        anchor = await asyncio.to_thread(
+            lambda: computer.mark_box(
+                target.box, title or target.label or description, note
+            )
+        )
         return (
-            f"Marked '{detection.label}' at {computer.center_of(detection)} "
+            f"Marked '{target.label}' at {anchor} "
             "and showed the note to the user."
         )
     except Exception as error:
@@ -143,28 +194,49 @@ async def screen_mark(description: str, note: str, title: str = "") -> str:
 
 
 @tool(parse_docstring=True, return_direct=False)
-async def screen_click(description: str, double: bool = False) -> str:
+async def screen_click(
+    description: str, double: bool = False, match: int = 0
+) -> str:
     """Click an element described in plain language.
 
     Call this only when the user asked you to *do* something on their machine.
-    If they only asked where something is, use screen_mark instead.
+    If they only asked where something is, use screen_mark instead. When
+    several elements match the description, nothing is clicked — the
+    candidates are listed so you can refine the description or pick one.
 
     Args:
-        description: The element to click, in plain language.
+        description: The element to click. Be concrete enough to match
+            exactly one element — its type, its text or icon, and where it
+            sits ("the URL address bar at the very top of the browser
+            window", not "the input field", which matches every input on
+            the screen).
         double: Whether to double-click instead of single-click.
+        match: 1-based number of the candidate to click when a previous call
+            listed several matches for the same description. Leave 0 when
+            the description should match uniquely.
 
     Returns:
-        Confirmation with the clicked label and coordinates, or a note that
-        nothing matched.
+        Confirmation with the clicked label and coordinates; the candidate
+        list when the description was ambiguous; or a note that nothing
+        matched.
     """
     try:
         computer = get_computer()
-        detection = await asyncio.to_thread(
-            lambda: computer.click_object(description, count=2 if double else 1)
+        detections = await asyncio.to_thread(
+            computer.locate_object, description
         )
-        if detection is None:
-            return f"Nothing on screen matched: {description}"
-        return f"Clicked '{detection.label}' at {computer.center_of(detection)}."
+        target, report = _resolve_match(
+            computer, description, detections, match, action="click"
+        )
+        if target is None:
+            return report
+        x, y = computer.center_of(target)
+        await asyncio.to_thread(
+            lambda: computer.double_click(x, y)
+            if double
+            else computer.left_click(x, y)
+        )
+        return f"Clicked '{target.label}' at {(x, y)}."
     except Exception as error:
         return f"Tool call failed, error: {error}"
 
