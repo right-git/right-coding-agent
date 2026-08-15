@@ -16,3 +16,4 @@ logs.log
 output_boxes.jpg
 *.whl
 *.log
+test.py

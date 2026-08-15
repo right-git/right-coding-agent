@@ -44,15 +44,6 @@ class Agents(LLMClient):
                     trigger=("tokens", 40000),
                     keep=("messages", 10),
                 ),
-                # LLMToolSelectorMiddleware(
-                #     model=self.build_chat_model(
-                #         model_name="openai/gpt-4.1",
-                #         provider=self.providers[0],
-                #     ),
-                #     max_tools=3
-                # ),
-                # Last, so it logs the message list as the model receives it —
-                # after image surfacing and summarization have run.
                 MessageLogMiddleware(),
             ],
         )
