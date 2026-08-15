@@ -86,16 +86,40 @@ class HotkeyTests(unittest.TestCase):
 
         self.assertEqual(len(fired), 2)  # два нажатия, удержание не дублирует
 
-    @unittest.skipUnless(sys.platform == "win32", "GetAsyncKeyState — только Windows")
-    def test_windows_listener_uses_the_poller_not_a_hook(self):
-        from src.voice.hotkey import KeyStatePoller
+    @unittest.skipUnless(sys.platform == "win32", "raw input — только Windows")
+    def test_windows_listener_prefers_the_raw_input_sink(self):
+        from src.voice.rawinput import RawKeyboardSink
 
         listener = HotkeyListener("alt_r", on_toggle=lambda: None)
         listener.start()
         try:
-            self.assertIsInstance(listener._listener, KeyStatePoller)
+            self.assertIsInstance(listener._listener, RawKeyboardSink)
         finally:
             listener.stop()
+
+    @unittest.skipUnless(sys.platform == "win32", "raw input — только Windows")
+    def test_raw_modifiers_normalize_to_sided_codes(self):
+        from src.voice.rawinput import RI_KEY_E0, normalize_vk
+
+        self.assertEqual(normalize_vk(0x12, RI_KEY_E0, 0x38), 0xA5)  # правый Alt
+        self.assertEqual(normalize_vk(0x12, 0, 0x38), 0xA4)  # левый Alt
+        self.assertEqual(normalize_vk(0x10, 0, 0x36), 0xA1)  # правый Shift по скан-коду
+        self.assertEqual(normalize_vk(0x41, 0, 0), 0x41)  # обычные клавиши как есть
+
+    @unittest.skipUnless(sys.platform == "win32", "raw input — только Windows")
+    def test_raw_decoder_fires_once_per_hold_and_swallows_autorepeat(self):
+        from src.voice.rawinput import RI_KEY_BREAK, RI_KEY_E0, KeyEdgeDecoder
+
+        fired = []
+        decoder = KeyEdgeDecoder({0xA5}, lambda: fired.append(1))
+
+        decoder.handle(0x12, RI_KEY_E0, 0x38)  # нажатие
+        decoder.handle(0x12, RI_KEY_E0, 0x38)  # autorepeat при удержании
+        decoder.handle(0x12, RI_KEY_E0 | RI_KEY_BREAK, 0x38)  # отпускание
+        decoder.handle(0x12, RI_KEY_E0, 0x38)  # второе нажатие
+        decoder.handle(0x12, 0, 0x38)  # левый Alt — не наша клавиша
+
+        self.assertEqual(len(fired), 2)
 
     def test_listener_fires_only_on_configured_key(self):
         from pynput import keyboard

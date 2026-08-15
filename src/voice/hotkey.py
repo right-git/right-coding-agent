@@ -141,11 +141,18 @@ class HotkeyListener:
         if self._listener_factory is None and sys.platform == "win32":
             vk_codes = resolve_vk(self.key_spec)
             if vk_codes:
+                sink = self._try_raw_input(vk_codes)
+                if sink is not None:
+                    self._listener = sink
+                    logger.info("Push-to-talk backend: raw-input sink ({})", self.key_spec)
+                    return
                 self._listener = KeyStatePoller(vk_codes, self._fire)
                 self._listener.start()
+                logger.info("Push-to-talk backend: GetAsyncKeyState poller ({})", self.key_spec)
                 return
 
         keys = parse_hotkey(self.key_spec)
+        logger.info("Push-to-talk backend: pynput listener ({})", self.key_spec)
 
         def on_press(key) -> None:
             if key in keys:
@@ -154,6 +161,19 @@ class HotkeyListener:
         factory = self._listener_factory or self._default_listener
         self._listener = factory(on_press)
         self._listener.start()
+
+    def _try_raw_input(self, vk_codes: set[int]):
+        """The primary Windows backend; None when it could not start."""
+        try:
+            from .rawinput import KeyEdgeDecoder, RawKeyboardSink
+
+            sink = RawKeyboardSink(KeyEdgeDecoder(vk_codes, self._fire))
+            if sink.start():
+                return sink
+            sink.stop()
+        except Exception:
+            logger.exception("Raw-input backend unavailable, falling back to polling")
+        return None
 
     def stop(self) -> None:
         if self._listener is not None:

@@ -182,6 +182,7 @@ class VoiceController:
         self._record_stop.clear()
         self._record_worker = threading.Thread(target=self._record_loop, daemon=True)
         self._record_worker.start()
+        logger.info("PTT: recording started")
         self._invalidate()
 
     def _record_loop(self) -> None:
@@ -199,11 +200,18 @@ class VoiceController:
         if self._record_worker is not None:
             self._record_worker.join(timeout=15)
         audio = self._recorder.stop()
+        started = time.monotonic()
         text = ""
         try:
             text = self._session.finalize(audio)
         except Exception:
             logger.exception("Transcription finalize failed")
+        logger.info(
+            "PTT: recording stopped — audio {:.1f}s, finalize {:.2f}s, text_chars {}",
+            len(audio) / 16_000,
+            time.monotonic() - started,
+            len(text),
+        )
         self._draft = ""
         self._invalidate()
         if text:
