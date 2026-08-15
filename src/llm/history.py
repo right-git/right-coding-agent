@@ -16,9 +16,17 @@ makes the model re-discover the same tools next turn — two extra model
 round-trips at full context, far dearer than the ~1k tokens the contracts
 cost. This self-regulates: once contracts are visible in history the model
 stops calling `get_tool`, and later recaps add none. Earlier turns are never
-rewritten, so provider prompt caching keeps its stable prefix; attached
-screenshot messages are passed through untouched (image pruning is a
-separate concern).
+rewritten by compaction, so provider prompt caching keeps its stable prefix.
+
+`prune_images` is the second half: every image in history is re-sent with
+every model call, and a screenshot goes stale the moment its turn ends — so
+only the newest tool screenshot survives (continuity of "what's on screen")
+and the newest few user-pasted images (the user may keep asking about
+them); older image blocks become short text stubs. Pruning does rewrite an
+old message once, when its image ages out of the keep-window — a one-time
+prompt-cache break per expiring image, far cheaper than re-sending the
+image forever. `finalize_turn_history` applies both steps; that is what the
+chat loop calls when a turn ends.
 """
 
 from uuid import uuid4
@@ -37,6 +45,11 @@ CONTRACT_SEPARATOR = "\n\n---\n\n"
 NOISE_TOOLS = frozenset({"search_tools"})
 CONTRACT_TOOL = "get_tool"
 RECAP_MARKER = "tool_recap"
+
+KEEP_TOOL_IMAGES = 1
+KEEP_USER_IMAGES = 3
+TOOL_IMAGE_STUB = "[screenshot removed to save context]"
+USER_IMAGE_STUB = "[image removed to save context]"
 
 
 def _clip(text: str, limit: int) -> str:
@@ -164,3 +177,61 @@ def compact_finished_turn(messages: list) -> list:
         *image_messages,
         *messages[final_start:],
     ]
+
+
+def _is_image_block(block) -> bool:
+    return isinstance(block, dict) and block.get("type") == "image_url"
+
+
+def prune_images(
+    messages: list,
+    *,
+    keep_tool: int = KEEP_TOOL_IMAGES,
+    keep_user: int = KEEP_USER_IMAGES,
+) -> list:
+    """History with all but the newest images replaced by text stubs.
+
+    Tool screenshots and user-pasted images have separate budgets, both
+    spent newest-first. Messages keep their ids, so usage accounting and
+    stream dedup are unaffected; already-stubbed blocks are plain text and
+    never counted again, which makes pruning idempotent.
+    """
+    tool_budget = keep_tool
+    user_budget = keep_user
+    result = list(messages)
+
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if not isinstance(message, HumanMessage) or not isinstance(message.content, list):
+            continue
+        is_tool = bool(message.additional_kwargs.get(ATTACHMENT_MARKER))
+        stub = TOOL_IMAGE_STUB if is_tool else USER_IMAGE_STUB
+
+        rebuilt_reversed = []
+        changed = False
+        for block in reversed(message.content):
+            if not _is_image_block(block):
+                rebuilt_reversed.append(block)
+                continue
+            if is_tool and tool_budget > 0:
+                tool_budget -= 1
+                rebuilt_reversed.append(block)
+            elif not is_tool and user_budget > 0:
+                user_budget -= 1
+                rebuilt_reversed.append(block)
+            else:
+                rebuilt_reversed.append({"type": "text", "text": stub})
+                changed = True
+
+        if changed:
+            result[index] = HumanMessage(
+                content=list(reversed(rebuilt_reversed)),
+                id=message.id,
+                additional_kwargs=dict(message.additional_kwargs),
+            )
+    return result
+
+
+def finalize_turn_history(messages: list) -> list:
+    """Everything that happens to history when a turn ends: compact, then prune."""
+    return prune_images(compact_finished_turn(messages))

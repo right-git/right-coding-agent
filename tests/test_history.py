@@ -174,5 +174,108 @@ class CompactFinishedTurnTests(unittest.TestCase):
         self.assertTrue(compacted[2].id)
 
 
+def tool_image_message(identifier, count=1):
+    blocks = [{"type": "text", "text": "Images captured by the tool calls above:"}]
+    for index in range(count):
+        blocks.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,IMG{identifier}{index}"}})
+    return HumanMessage(content=blocks, id=identifier, additional_kwargs={ATTACHMENT_MARKER: True})
+
+
+def user_image_message(identifier, text="смотри"):
+    return HumanMessage(
+        content=[
+            {"type": "text", "text": text},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,USR{identifier}"}},
+        ],
+        id=identifier,
+    )
+
+
+def image_urls(message):
+    return [block["image_url"]["url"] for block in message.content if block.get("type") == "image_url"]
+
+
+class PruneImagesTests(unittest.TestCase):
+    def test_only_the_newest_tool_screenshot_survives(self):
+        from src.llm.history import TOOL_IMAGE_STUB, prune_images
+
+        messages = [
+            tool_image_message("shot1"),
+            AIMessage("step one"),
+            tool_image_message("shot2"),
+            AIMessage("step two"),
+        ]
+
+        pruned = prune_images(messages, keep_tool=1)
+
+        self.assertEqual(image_urls(pruned[0]), [])
+        self.assertIn({"type": "text", "text": TOOL_IMAGE_STUB}, pruned[0].content)
+        self.assertEqual(len(image_urls(pruned[2])), 1)
+
+    def test_user_images_keep_their_own_budget(self):
+        from src.llm.history import USER_IMAGE_STUB, prune_images
+
+        messages = [
+            user_image_message("u1"),
+            user_image_message("u2"),
+            tool_image_message("shot1"),
+            user_image_message("u3"),
+        ]
+
+        pruned = prune_images(messages, keep_tool=1, keep_user=2)
+
+        self.assertIn({"type": "text", "text": USER_IMAGE_STUB}, pruned[0].content)
+        self.assertEqual(len(image_urls(pruned[1])), 1)
+        self.assertEqual(len(image_urls(pruned[2])), 1)  # tool budget untouched by user images
+        self.assertEqual(len(image_urls(pruned[3])), 1)
+
+    def test_ids_and_markers_survive_the_rewrite(self):
+        from src.llm.history import prune_images
+
+        messages = [tool_image_message("old"), tool_image_message("new")]
+
+        pruned = prune_images(messages, keep_tool=1)
+
+        self.assertEqual(pruned[0].id, "old")
+        self.assertTrue(pruned[0].additional_kwargs[ATTACHMENT_MARKER])
+
+    def test_pruning_is_idempotent(self):
+        from src.llm.history import prune_images
+
+        messages = [tool_image_message("a"), tool_image_message("b"), tool_image_message("c")]
+
+        once = prune_images(messages, keep_tool=1)
+        twice = prune_images(once, keep_tool=1)
+
+        self.assertEqual([m.content for m in once], [m.content for m in twice])
+
+    def test_plain_text_messages_are_untouched(self):
+        from src.llm.history import prune_images
+
+        messages = [HumanMessage("привет"), AIMessage("привет!")]
+
+        self.assertEqual(prune_images(messages), messages)
+
+
+class FinalizeTurnHistoryTests(unittest.TestCase):
+    def test_compacts_tools_and_prunes_old_images(self):
+        from src.llm.history import finalize_turn_history
+
+        messages = [
+            tool_image_message("old"),
+            HumanMessage("что на экране?"),
+            *run_tools_round("screen_screenshot()", "attached", "c1"),
+            tool_image_message("fresh"),
+            AIMessage("вижу браузер"),
+        ]
+
+        finalized = finalize_turn_history(messages)
+
+        self.assertIn({"type": "text", "text": "[screenshot removed to save context]"}, finalized[0].content)
+        self.assertTrue(finalized[2].additional_kwargs["tool_recap"])
+        self.assertEqual(len(image_urls(finalized[4])), 1)
+        self.assertEqual(finalized[5].content, "вижу браузер")
+
+
 if __name__ == "__main__":
     unittest.main()
