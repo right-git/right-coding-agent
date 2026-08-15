@@ -17,4 +17,7 @@ output_boxes.jpg
 *.whl
 *.log
 test.py
+testscripts/
+.venv-chatterbox/
 logs.*
+models/
