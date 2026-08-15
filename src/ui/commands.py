@@ -50,9 +50,12 @@ class CommandHandler:
             return self._switch_effort(argument)
         if command in ("/temperature", "/temp"):
             return self._switch_temperature(argument)
+        if command == "/paste":
+            return self._paste_image()
         if command in ("/log-level", "/loglevel"):
             return self._switch_log_level(argument) if argument else self._print_log_level()
         if command == "/clear":
+            self.ui.pending_images.clear()
             self.console.clear()
             self.ui.print_welcome()
             return "clear"
@@ -69,6 +72,7 @@ class CommandHandler:
             ("/model <name> [effort]", "switch model (and optionally reasoning effort)"),
             ("/effort [level]", f"reasoning effort: {', '.join(EFFORT_LEVELS)}, or none"),
             ("/temperature [value]", "sampling temperature 0..2, or none"),
+            ("/paste", "attach an image from the clipboard (also Ctrl+V in many terminals)"),
             ("/log-level [name]", "show or change the log level"),
             ("/clear", "clear screen and history"),
             ("/quit", "exit"),
@@ -294,6 +298,20 @@ class CommandHandler:
             return None
         self.ui.temperature = value
         self.console.print(f"  temperature set to {value:g}", style="success")
+        return None
+
+    # --------------------------------------------------------------- images
+
+    def _paste_image(self) -> None:
+        if not self.ui.attach_clipboard_image():
+            self.console.print("  no image in the clipboard", style="error")
+            return None
+        image = self.ui.pending_images[-1]
+        self.console.print(
+            f"  image attached ({image['width']}×{image['height']}) — "
+            f"{len(self.ui.pending_images)} image(s) will go with your next message",
+            style="success",
+        )
         return None
 
     # -------------------------------------------------------------- logging

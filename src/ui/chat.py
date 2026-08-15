@@ -4,11 +4,13 @@ from contextlib import contextmanager
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
+from prompt_toolkit.key_binding import KeyBindings
 from rich import box
 from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
+from src.ui.clipboard import encode_image, grab_clipboard_image
 from src.ui.commands import CommandHandler
 from src.ui.completer import CommandCompleter
 from src.ui.stream import TurnStream
@@ -42,6 +44,7 @@ class ChatUI:
         self.prompt_session: PromptSession | None = None
         self.reasoning_effort: str | None = None
         self.temperature: float | None = None
+        self.pending_images: list[dict] = []
         self.commands = CommandHandler(self)
 
     def set_model_catalog(self, catalog: dict[str, ModelInfo] | None) -> None:
@@ -54,8 +57,51 @@ class ChatUI:
                 history=InMemoryHistory(),
                 completer=CommandCompleter(self),
                 complete_while_typing=True,
+                key_bindings=self._build_key_bindings(),
             )
         return self.prompt_session
+
+    def _build_key_bindings(self) -> KeyBindings:
+        bindings = KeyBindings()
+
+        @bindings.add("c-v")
+        def paste(event) -> None:
+            # Terminals that paste on Ctrl+V themselves never deliver the key
+            # here — /paste is the reliable fallback. When we do get it: an
+            # image in the clipboard beats text.
+            if self.attach_clipboard_image():
+                event.current_buffer.insert_text(f"[image {len(self.pending_images)}] ")
+                return
+            import pyperclip
+
+            event.current_buffer.insert_text(pyperclip.paste() or "")
+
+        return bindings
+
+    def attach_clipboard_image(self) -> bool:
+        """Queue the clipboard's image for the next message; False when none."""
+        image = grab_clipboard_image()
+        if image is None:
+            return False
+        self.pending_images.append(encode_image(image))
+        return True
+
+    def take_user_content(self, text: str) -> str | list[dict]:
+        """The next message's content: plain text, or text plus queued images."""
+        if not self.pending_images:
+            return text
+        blocks: list[dict] = []
+        if text.strip():
+            blocks.append({"type": "text", "text": text})
+        for image in self.pending_images:
+            blocks.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{image['mime_type']};base64,{image['base64_data']}"},
+                }
+            )
+        self.pending_images.clear()
+        return blocks
 
     def settings_line(self) -> str:
         """`effort high · temperature default (1.0)` for the session settings.

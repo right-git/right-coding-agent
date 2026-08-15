@@ -19,6 +19,7 @@ COMMANDS: dict[str, str] = {
     "/model": "switch model (and effort)",
     "/effort": "reasoning effort",
     "/temperature": "sampling temperature",
+    "/paste": "attach a clipboard image",
     "/log-level": "show or change log level",
     "/clear": "clear screen and history",
     "/quit": "exit",

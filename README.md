@@ -126,6 +126,7 @@ the production agent, then compare the usage footers — see
 - `/model <name> [effort]` — switch models by exact or partial match over the curated list **and** the catalog; a model the catalog marks as unable to call tools is refused; an optional trailing effort (`/model o5 high`) sets reasoning effort in the same command;
 - `/effort [minimal|low|medium|high|none]` — show or change the reasoning effort of the current model (refused when the catalog says the model has no reasoning support);
 - `/temperature <0..2|none>` (alias `/temp`) — show or change the sampling temperature;
+- `/paste` — attach an image from the clipboard to your next message (a screenshot, a copied picture, or a copied image file); in terminals that forward the key, plain **Ctrl+V** in the input does the same and inserts an `[image N]` placeholder;
 - `/log-level [name]`, `/clear`, `/help`, `/quit`.
 
 Commands autocomplete as you type: `/` suggests command names, `/model ` suggests tool-capable model ids straight from the catalog (with ctx/price shown), `/effort` its levels, `/log-level` its levels.
