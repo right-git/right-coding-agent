@@ -185,3 +185,199 @@ class UsageFooterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+TOOLLESS = ModelInfo(
+    id="meta/llama-chat",
+    name="Meta: Llama Chat",
+    context_length=8192,
+    prompt_price=1e-8,
+    completion_price=2e-8,
+    supported_parameters=frozenset({"temperature"}),
+)
+REASONER = ModelInfo(
+    id="openai/o5-mini",
+    name="OpenAI: o5 mini",
+    context_length=200_000,
+    prompt_price=1e-7,
+    completion_price=4e-7,
+    supported_parameters=frozenset({"tools", "reasoning", "temperature"}),
+)
+NO_KNOBS = ModelInfo(
+    id="google/gemini-3.7-flash",
+    name="Google: Gemini 3.7 Flash",
+    context_length=1_048_576,
+    prompt_price=7.5e-8,
+    completion_price=3e-7,
+    supported_parameters=frozenset({"tools"}),
+)
+
+
+class CapabilityFilterTests(unittest.TestCase):
+    def test_switching_to_a_toolless_model_is_refused(self):
+        ui = make_ui(catalog={TOOLLESS.id: TOOLLESS})
+
+        ui.handle_command("/model meta/llama-chat")
+
+        self.assertEqual(ui.model, "google/gemini-3.7-flash")
+        self.assertIn("cannot call tools", ui.console.export_text())
+
+    def test_partial_match_skips_toolless_models_and_explains(self):
+        ui = make_ui(catalog={TOOLLESS.id: TOOLLESS})
+
+        ui.handle_command("/model llama")
+
+        self.assertEqual(ui.model, "google/gemini-3.7-flash")
+        self.assertIn("cannot call tools", ui.console.export_text())
+
+    def test_model_search_lists_capable_models_with_reasoning_tag(self):
+        ui = make_ui(catalog={TOOLLESS.id: TOOLLESS, REASONER.id: REASONER})
+
+        ui.handle_command("/models o5")
+
+        rendered = ui.console.export_text()
+        self.assertIn("openai/o5-mini", rendered)
+        self.assertIn("reasoning", rendered)
+
+    def test_model_search_reports_hidden_toolless_matches(self):
+        ui = make_ui(catalog={TOOLLESS.id: TOOLLESS})
+
+        ui.handle_command("/models llama")
+
+        self.assertIn("no tool-call support", ui.console.export_text())
+
+
+class EffortCommandTests(unittest.TestCase):
+    def test_effort_sets_and_resets(self):
+        ui = make_ui()
+
+        ui.handle_command("/effort high")
+        self.assertEqual(ui.reasoning_effort, "high")
+
+        ui.handle_command("/effort none")
+        self.assertIsNone(ui.reasoning_effort)
+
+    def test_invalid_effort_is_rejected(self):
+        ui = make_ui()
+
+        ui.handle_command("/effort turbo")
+
+        self.assertIsNone(ui.reasoning_effort)
+        self.assertIn("invalid effort", ui.console.export_text())
+
+    def test_effort_is_refused_when_the_model_lacks_reasoning(self):
+        ui = make_ui(catalog={NO_KNOBS.id: NO_KNOBS})
+
+        ui.handle_command("/effort high")
+
+        self.assertIsNone(ui.reasoning_effort)
+        self.assertIn("does not support reasoning", ui.console.export_text())
+
+    def test_model_switch_applies_an_effort_suffix(self):
+        ui = make_ui(catalog={REASONER.id: REASONER})
+
+        ui.handle_command("/model o5 high")
+
+        self.assertEqual(ui.model, "openai/o5-mini")
+        self.assertEqual(ui.reasoning_effort, "high")
+
+
+class TemperatureCommandTests(unittest.TestCase):
+    def test_temperature_sets_and_resets(self):
+        ui = make_ui()
+
+        ui.handle_command("/temperature 0.7")
+        self.assertEqual(ui.temperature, 0.7)
+
+        ui.handle_command("/temp none")
+        self.assertIsNone(ui.temperature)
+
+    def test_out_of_range_and_garbage_are_rejected(self):
+        ui = make_ui()
+
+        ui.handle_command("/temperature 3")
+        self.assertIsNone(ui.temperature)
+
+        ui.handle_command("/temperature warm")
+        self.assertIsNone(ui.temperature)
+        self.assertIn("invalid temperature", ui.console.export_text())
+
+    def test_settings_show_up_in_the_models_listing(self):
+        ui = make_ui()
+        ui.handle_command("/effort low")
+        ui.handle_command("/temperature 0.2")
+
+        ui.handle_command("/models")
+
+        self.assertIn("effort low · temperature 0.2", ui.console.export_text())
+
+
+class UnknownCommandTests(unittest.TestCase):
+    def test_unknown_command_suggests_help(self):
+        ui = make_ui()
+
+        ui.handle_command("/frobnicate")
+
+        self.assertIn("unknown command", ui.console.export_text())
+
+
+class BatchVariantTests(unittest.TestCase):
+    def test_batch_variants_are_hidden_from_search(self):
+        batch = ModelInfo(
+            id="openai/o5-mini:batch",
+            name="OpenAI: o5 mini (batch)",
+            context_length=200_000,
+            prompt_price=5e-8,
+            completion_price=2e-7,
+            supported_parameters=frozenset({"tools"}),
+        )
+        ui = make_ui(catalog={REASONER.id: REASONER, batch.id: batch})
+
+        ui.handle_command("/models o5")
+
+        self.assertNotIn(":batch", ui.console.export_text())
+
+    def test_partial_match_ignores_batch_variants(self):
+        batch = ModelInfo(
+            id="openai/o5-mini:batch",
+            name="OpenAI: o5 mini (batch)",
+            context_length=200_000,
+            prompt_price=5e-8,
+            completion_price=2e-7,
+            supported_parameters=frozenset({"tools"}),
+        )
+        ui = make_ui(catalog={REASONER.id: REASONER, batch.id: batch})
+
+        ui.handle_command("/model o5")
+
+        self.assertEqual(ui.model, "openai/o5-mini")
+
+
+class DefaultParameterDisplayTests(unittest.TestCase):
+    def test_settings_line_shows_the_model_default_temperature(self):
+        gemini = ModelInfo(
+            id="google/gemini-3.7-flash",
+            name="Google: Gemini 3.7 Flash",
+            context_length=1_048_576,
+            prompt_price=7.5e-8,
+            completion_price=3e-7,
+            supported_parameters=frozenset({"tools", "temperature"}),
+            default_temperature=1.0,
+        )
+        ui = make_ui(catalog={gemini.id: gemini})
+
+        self.assertIn("temperature default (1)", ui.settings_line())
+
+    def test_temperature_command_explains_the_default(self):
+        ui = make_ui()
+
+        ui.handle_command("/temperature")
+
+        self.assertIn("the provider decides", ui.console.export_text())
+
+    def test_effort_command_explains_the_default(self):
+        ui = make_ui()
+
+        ui.handle_command("/effort")
+
+        self.assertIn("the provider decides", ui.console.export_text())

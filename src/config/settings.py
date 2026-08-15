@@ -22,6 +22,10 @@ class Settings(BaseSettings):
         ...,
         description="LLM API Base",
     )
+    llm_default_model: str = Field(
+        default="google/gemini-3.7-flash",
+        description="Model the chat starts with; any provider-prefixed id.",
+    )
 
 
 settings = Settings()

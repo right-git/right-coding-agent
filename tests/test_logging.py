@@ -46,7 +46,7 @@ class LoggingManagerTests(unittest.TestCase):
 
 class ChatUILoggingCommandTests(unittest.TestCase):
     def test_log_level_command_updates_logging_manager(self):
-        with patch("src.ui.chat.app_logging") as app_logging:
+        with patch("src.ui.commands.app_logging") as app_logging:
             app_logging.set_level = Mock(return_value="DEBUG")
             ui = ChatUI(model="openai/gpt-5.1-codex-mini")
             ui.console = Console(

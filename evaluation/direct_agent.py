@@ -31,6 +31,8 @@ class DirectAgents(Agents):
         messages: list[HumanMessage | AIMessage | ToolMessage],
         model: str,
         thread_id: str | None = None,
+        reasoning_effort: str | None = None,
+        temperature: float | None = None,
         on_message=None,
         on_token=None,
     ):
@@ -41,6 +43,8 @@ class DirectAgents(Agents):
             agent_input={"messages": messages},
             tools=[*DIRECT_TOOLS],
             thread_id=thread_id,
+            reasoning_effort=reasoning_effort,
+            temperature=temperature,
             on_message=on_message,
             on_token=on_token,
             middlewares=[
@@ -64,6 +68,8 @@ class DirectAgents(Agents):
         messages: list[HumanMessage | AIMessage | ToolMessage],
         model: str,
         thread_id: str | None = None,
+        reasoning_effort: str | None = None,
+        temperature: float | None = None,
         on_message=None,
         on_token=None,
     ):
@@ -71,6 +77,8 @@ class DirectAgents(Agents):
             messages=messages,
             model=model,
             thread_id=thread_id,
+            reasoning_effort=reasoning_effort,
+            temperature=temperature,
             on_message=on_message,
             on_token=on_token,
         )

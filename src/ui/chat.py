@@ -1,20 +1,20 @@
 import os
-import sys
 from contextlib import contextmanager
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
 from rich import box
-from rich.console import Console
+from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
+from src.ui.commands import CommandHandler
+from src.ui.completer import CommandCompleter
 from src.ui.stream import TurnStream
 from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
-from src.config.logging import app_logging
 from src.llm.middlewares import scrub_text
 from src.llm.providers import ModelInfo
 from src.llm.types import TurnUsage
@@ -40,6 +40,9 @@ class ChatUI:
         self.available_models = available_models or []
         self.model_catalog: dict[str, ModelInfo] = {}
         self.prompt_session: PromptSession | None = None
+        self.reasoning_effort: str | None = None
+        self.temperature: float | None = None
+        self.commands = CommandHandler(self)
 
     def set_model_catalog(self, catalog: dict[str, ModelInfo] | None) -> None:
         """Install OpenRouter metadata used by /models, /model, and the usage footer."""
@@ -47,25 +50,53 @@ class ChatUI:
 
     def _get_prompt_session(self) -> PromptSession:
         if self.prompt_session is None:
-            self.prompt_session = PromptSession(history=InMemoryHistory())
+            self.prompt_session = PromptSession(
+                history=InMemoryHistory(),
+                completer=CommandCompleter(self),
+                complete_while_typing=True,
+            )
         return self.prompt_session
 
+    def settings_line(self) -> str:
+        """`effort high · temperature default (1.0)` for the session settings.
+
+        "default" means the parameter is not sent and the provider decides;
+        when the OpenRouter catalog publishes the model's own default, it is
+        shown in parentheses.
+        """
+        info = self.model_catalog.get(self.model)
+        effort = self.reasoning_effort or "default"
+        if self.temperature is not None:
+            temperature = f"{self.temperature:g}"
+        elif info is not None and info.default_temperature is not None:
+            temperature = f"default ({info.default_temperature:g})"
+        else:
+            temperature = "default"
+        return f"effort {effort} · temperature {temperature}"
+
     def print_welcome(self):
-        self.console.clear()
+        # No screen clearing here: the banner joins the normal output flow,
+        # so the terminal never jumps and nothing scrolls out of reach when
+        # the input gets focus. /clear wipes the screen itself before calling.
         info = Table.grid(padding=(0, 2))
         info.add_column(style="info", justify="right", no_wrap=True)
         info.add_column()
         info.add_row("model", self.model)
+        info.add_row("settings", self.settings_line())
         info.add_row("cwd", os.getcwd())
         info.add_row("logs", "logs.log")
         info.add_row("vision", "nvidia/LocateAnything-3B · loads in background")
-        info.add_row("", Text("/help for commands · /quit to exit", style="info"))
+        body = Group(
+            Text("✻ Right Code", style="bold magenta"),
+            Text(""),
+            info,
+            Text(""),
+            Text("/help for commands · /quit to exit", style="info"),
+        )
         self.console.print()
         self.console.print(
             Panel(
-                info,
-                title="[bold magenta]✻ Right Code[/]",
-                title_align="left",
+                body,
                 border_style="magenta",
                 box=box.ROUNDED,
                 padding=(0, 2),
@@ -82,41 +113,8 @@ class ChatUI:
             return "/quit"
 
     def handle_command(self, text: str) -> str | None:
-        stripped = text.strip()
-        cmd = stripped.lower()
-
-        if cmd in ("/quit", "/exit", "/q"):
-            self.print_goodbye()
-            sys.exit(0)
-
-        if cmd == "/help":
-            self._print_help()
-            return None
-
-        if cmd == "/models":
-            self._print_models()
-            return None
-
-        if cmd.startswith("/model "):
-            return self._switch_model(text.strip()[7:].strip())
-
-        if cmd in ("/log-level", "/loglevel"):
-            self.console.print(
-                f"  current log level: {app_logging.get_level()}",
-                style="info",
-            )
-            return None
-
-        if cmd.startswith("/log-level ") or cmd.startswith("/loglevel "):
-            _, level_name = stripped.split(maxsplit=1)
-            return self._switch_log_level(level_name)
-
-        if cmd == "/clear":
-            self.console.clear()
-            self.print_welcome()
-            return "clear"
-
-        return None
+        """Dispatch a slash command; returns "clear" when history must reset."""
+        return self.commands.handle(text)
 
     def _format_tool_call(self, tc: dict) -> tuple[str, str]:
         """Return (label, detail) for a tool call."""
@@ -302,89 +300,6 @@ class ChatUI:
     def print_goodbye(self):
         self.console.print("\n  goodbye!\n", style="info")
 
-    def _print_help(self):
-        commands = [
-            ("/help", "show this help"),
-            ("/models", "list available models"),
-            ("/model <name>", "switch model"),
-            ("/log-level", "show current log level"),
-            ("/log-level <name>", "change log level"),
-            ("/clear", "clear screen"),
-            ("/quit", "exit"),
-        ]
-        self.console.print()
-        for cmd, desc in commands:
-            self.console.print(f"  {cmd:<20} {desc}", style="info")
-        self.console.print()
-
-    def _model_summary(self, model_id: str) -> str | None:
-        """`ctx 1,048,576 · $0.075/M in, $0.30/M out` for a known model."""
-        info = self.model_catalog.get(model_id)
-        if info is None:
-            return None
-        parts = []
-        if info.context_length:
-            parts.append(f"ctx {info.context_length:,}")
-        if info.prompt_price is not None and info.completion_price is not None:
-            parts.append(f"${info.prompt_price * 1e6:.3g}/M in, " f"${info.completion_price * 1e6:.3g}/M out")
-        return " · ".join(parts) or None
-
-    def _model_line(self, model_id: str) -> str:
-        summary = self._model_summary(model_id)
-        return f"{model_id}  ({summary})" if summary else model_id
-
-    def _print_models(self):
-        self.console.print()
-        listed = list(self.available_models)
-        if self.model not in listed:
-            listed.append(self.model)
-        for m in listed:
-            marker = "●" if m == self.model else "○"
-            style = "success" if m == self.model else "info"
-            self.console.print(f"  {marker} {self._model_line(m)}", style=style)
-        hint = "/model <id> also accepts any OpenRouter model id"
-        if not self.model_catalog:
-            hint += " (OpenRouter catalog not loaded)"
-        self.console.print(f"  {hint}", style="info")
-        self.console.print()
-
-    def _apply_model(self, model_name: str) -> None:
-        self.model = model_name
-        self.console.print(f"  switched to {self._model_line(model_name)}", style="success")
-
-    def _switch_model(self, model_name: str) -> str | None:
-        if model_name in self.available_models or model_name in self.model_catalog:
-            self._apply_model(model_name)
-            return None
-
-        # try partial match over the curated list and the OpenRouter catalog
-        needle = model_name.lower()
-        candidates = sorted(
-            {m for m in self.available_models if needle in m.lower()}
-            | {m for m in self.model_catalog if needle in m.lower()}
-        )
-        if len(candidates) == 1:
-            self._apply_model(candidates[0])
-            return None
-        if candidates:
-            self.console.print(f"  {len(candidates)} models match {model_name!r}:", style="info")
-            for candidate in candidates[:8]:
-                self.console.print(f"    {self._model_line(candidate)}", style="info")
-            if len(candidates) > 8:
-                self.console.print(f"    … and {len(candidates) - 8} more", style="info")
-            return None
-
-        if not self.model_catalog:
-            self.model = model_name
-            self.console.print(
-                f"  switched to {model_name} " "(not verified — OpenRouter catalog unavailable)",
-                style="success",
-            )
-            return None
-
-        self.console.print(f"  unknown model: {model_name}", style="error")
-        return None
-
     @staticmethod
     def _context_bar(used: int, limit: int, width: int = 20) -> str:
         """A colored fill bar for context usage, green → yellow → red."""
@@ -445,16 +360,3 @@ class ChatUI:
         parts.append(session_part)
 
         self.console.print("  " + " · ".join(parts), style="info")
-
-    def _switch_log_level(self, level_name: str) -> str | None:
-        try:
-            new_level = app_logging.set_level(level_name)
-        except ValueError as exc:
-            self.console.print(f"  {exc}", style="error")
-            return None
-
-        self.console.print(
-            f"  log level set to {new_level}",
-            style="success",
-        )
-        return None

@@ -15,6 +15,8 @@ class Agents(LLMClient):
         messages: list[HumanMessage | AIMessage | ToolMessage],
         model: str,
         thread_id: str | None = None,
+        reasoning_effort: str | None = None,
+        temperature: float | None = None,
         on_message=None,
         on_token=None,
     ):
@@ -31,6 +33,8 @@ class Agents(LLMClient):
             agent_input={"messages": messages},
             tools=tools,
             thread_id=thread_id,
+            reasoning_effort=reasoning_effort,
+            temperature=temperature,
             on_message=on_message,
             on_token=on_token,
             middlewares=[

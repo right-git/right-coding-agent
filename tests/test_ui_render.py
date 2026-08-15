@@ -34,6 +34,8 @@ class WelcomeTests(unittest.TestCase):
         self.assertIn("logs.log", rendered)
         self.assertIn("LocateAnything-3B", rendered)
         self.assertIn("/help", rendered)
+        self.assertIn("effort default", rendered)
+        self.assertIn("temperature default", rendered)
 
 
 class ToolCallRenderTests(unittest.TestCase):

@@ -89,6 +89,7 @@ Create a `.env` file at the repo root before the first run — importing `src.co
 ENV=dev
 LLM_API_KEY=<your key>
 LLM_API_BASE=<OpenAI-compatible endpoint, e.g. https://openrouter.ai/api/v1>
+LLM_DEFAULT_MODEL=google/gemini-3.7-flash   # optional: the model the chat starts with
 ```
 
 ### Verify the install
@@ -121,9 +122,15 @@ the production agent, then compare the usage footers — see
 
 ## Chat commands and usage footer
 
-- `/models` — list models with their context window and $/M pricing (metadata from the public OpenRouter API);
-- `/model <name>` — switch models: exact or partial match over the curated list **and** the whole OpenRouter catalog, so any OpenRouter model id works;
+- `/models [query]` — list the curated models, or search the whole OpenRouter catalog; search only offers **tool-capable** models (the agent's workflow is tool calls) and tags reasoning-capable ones;
+- `/model <name> [effort]` — switch models by exact or partial match over the curated list **and** the catalog; a model the catalog marks as unable to call tools is refused; an optional trailing effort (`/model o5 high`) sets reasoning effort in the same command;
+- `/effort [minimal|low|medium|high|none]` — show or change the reasoning effort of the current model (refused when the catalog says the model has no reasoning support);
+- `/temperature <0..2|none>` (alias `/temp`) — show or change the sampling temperature;
 - `/log-level [name]`, `/clear`, `/help`, `/quit`.
+
+Commands autocomplete as you type: `/` suggests command names, `/model ` suggests tool-capable model ids straight from the catalog (with ctx/price shown), `/effort` its levels, `/log-level` its levels.
+
+Session settings (model, effort, temperature) apply from the next turn on and are shown after every `/model` switch and in `/models`. "default" means the parameter is not sent — the provider decides; when OpenRouter publishes the model's own default temperature it is shown in parentheses, e.g. `temperature default (1)`.
 
 While a turn runs, the terminal shows live progress, Claude-Code-style: a
 stopwatch for the current phase (`thinking… 12s` / `running tools… 3s`), every

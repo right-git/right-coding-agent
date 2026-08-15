@@ -14,9 +14,9 @@ from src.llm.utils import (
 )
 from src.ui import ChatUI
 
-available_models = [
-    "google/gemini-3.7-flash",
-]
+# The startup model comes from .env (LLM_DEFAULT_MODEL); /model can switch
+# to anything else at runtime.
+available_models = [settings.llm_default_model]
 
 EMPTY_RESPONSE_NUDGE = (
     "Your last message was empty. Continue: finish the remaining steps of "
@@ -88,6 +88,8 @@ async def process_user_turn(
     user_content: str,
     catalog: OpenRouterCatalog | None = None,
     session_usage: SessionUsage | None = None,
+    reasoning_effort: str | None = None,
+    temperature: float | None = None,
 ) -> list[HumanMessage | AIMessage | ToolMessage]:
     started = time.perf_counter()
     base_messages = trim_incomplete_tool_calls(messages)
@@ -108,6 +110,8 @@ async def process_user_turn(
             response = await agents.right_coding_agent(
                 messages=working_messages,
                 model=model,
+                reasoning_effort=reasoning_effort,
+                temperature=temperature,
                 on_message=getattr(stream, "on_message", None),
                 on_token=getattr(stream, "on_token", None),
             )
@@ -130,6 +134,8 @@ async def process_user_turn(
                 response = await agents.right_coding_agent(
                     messages=retry_messages,
                     model=model,
+                    reasoning_effort=reasoning_effort,
+                    temperature=temperature,
                     on_message=getattr(stream, "on_message", None),
                     on_token=getattr(stream, "on_token", None),
                 )
@@ -267,6 +273,8 @@ async def main():
                 user_content=user_content,
                 catalog=catalog,
                 session_usage=session_usage,
+                reasoning_effort=ui.reasoning_effort,
+                temperature=ui.temperature,
             )
     finally:
         catalog_task.cancel()

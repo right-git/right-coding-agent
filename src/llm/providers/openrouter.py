@@ -22,19 +22,47 @@ REQUEST_TIMEOUT = 8.0
 
 @dataclass(frozen=True)
 class ModelInfo:
-    """One model's metadata; prices are USD per single token."""
+    """One model's metadata; prices are USD per single token.
+
+    `supported_parameters` comes straight from the OpenRouter API ("tools",
+    "reasoning", "temperature", ...). An empty set means the capability list
+    is unknown (old cache, other source) — treat unknown as permitted, and
+    only refuse what the catalog *positively* says is missing.
+    """
 
     id: str
     name: str
     context_length: int | None
     prompt_price: float | None
     completion_price: float | None
+    supported_parameters: frozenset[str] = frozenset()
+    default_temperature: float | None = None
 
     def cost_of(self, input_tokens: int, output_tokens: int) -> float | None:
         """Dollar cost of one call, or None when pricing is unknown."""
         if self.prompt_price is None or self.completion_price is None:
             return None
         return input_tokens * self.prompt_price + output_tokens * self.completion_price
+
+    def _lacks(self, parameter: str) -> bool:
+        return bool(self.supported_parameters) and parameter not in self.supported_parameters
+
+    @property
+    def lacks_tools(self) -> bool:
+        """True when the catalog positively says the model cannot call tools."""
+        return self._lacks("tools")
+
+    @property
+    def lacks_reasoning(self) -> bool:
+        return self._lacks("reasoning")
+
+    @property
+    def lacks_temperature(self) -> bool:
+        return self._lacks("temperature")
+
+    @property
+    def supports_reasoning(self) -> bool:
+        return "reasoning" in self.supported_parameters
 
 
 def _parse_price(value: Any) -> float | None:
@@ -44,6 +72,17 @@ def _parse_price(value: Any) -> float | None:
         return None
     # OpenRouter marks dynamically priced routes with negative sentinels.
     return price if price >= 0 else None
+
+
+def _parse_default_temperature(entry: dict) -> float | None:
+    defaults = entry.get("default_parameters")
+    if not isinstance(defaults, dict):
+        return None
+    try:
+        value = float(defaults.get("temperature"))
+    except (TypeError, ValueError):
+        return None
+    return value if 0 <= value <= 2 else None
 
 
 def _parse_context_length(entry: dict) -> int | None:
@@ -71,12 +110,20 @@ def parse_models(payload: Any) -> dict[str, ModelInfo]:
         if not isinstance(model_id, str) or not model_id:
             continue
         pricing = entry.get("pricing") or {}
+        raw_parameters = entry.get("supported_parameters")
+        parameters = (
+            frozenset(str(parameter) for parameter in raw_parameters)
+            if isinstance(raw_parameters, list)
+            else frozenset()
+        )
         models[model_id] = ModelInfo(
             id=model_id,
             name=str(entry.get("name") or model_id),
             context_length=_parse_context_length(entry),
             prompt_price=_parse_price(pricing.get("prompt")),
             completion_price=_parse_price(pricing.get("completion")),
+            supported_parameters=parameters,
+            default_temperature=_parse_default_temperature(entry),
         )
     return models
 

@@ -9,6 +9,8 @@ PAYLOAD = {
             "name": "Google: Gemini 3.7 Flash",
             "context_length": 1048576,
             "pricing": {"prompt": "0.000000075", "completion": "0.0000003"},
+            "supported_parameters": ["tools", "reasoning", "temperature"],
+            "default_parameters": {"temperature": 1.0},
         },
         {
             "id": "openai/gpt-5.1-codex-mini",
@@ -56,6 +58,23 @@ class ParseModelsTests(unittest.TestCase):
         self.assertEqual(info.context_length, 400000)
         self.assertIsNone(info.prompt_price)
         self.assertIsNone(info.completion_price)
+
+    def test_supported_parameters_drive_capability_flags(self):
+        gemini = parse_models(PAYLOAD)["google/gemini-3.7-flash"]
+        codex = parse_models(PAYLOAD)["openai/gpt-5.1-codex-mini"]
+
+        self.assertFalse(gemini.lacks_tools)
+        self.assertTrue(gemini.supports_reasoning)
+        self.assertFalse(gemini.lacks_temperature)
+        # No capability list published: unknown, never treated as missing.
+        self.assertFalse(codex.lacks_tools)
+        self.assertFalse(codex.supports_reasoning)
+
+    def test_default_temperature_is_parsed_when_published(self):
+        models = parse_models(PAYLOAD)
+
+        self.assertEqual(models["google/gemini-3.7-flash"].default_temperature, 1.0)
+        self.assertIsNone(models["openai/gpt-5.1-codex-mini"].default_temperature)
 
     def test_garbage_payloads_parse_to_nothing(self):
         self.assertEqual(parse_models(None), {})
