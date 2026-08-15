@@ -11,7 +11,7 @@ import time
 from ctypes import wintypes
 from dataclasses import dataclass
 
-from .types import Box
+from ...types import Box
 
 SW_RESTORE = 9
 SW_SHOW = 5

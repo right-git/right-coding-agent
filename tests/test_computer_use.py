@@ -27,7 +27,7 @@ class PositionLabelTests(unittest.TestCase):
         self.assertEqual(position_label((150, 290), size), "bottom-center")
 
 
-from src.llm.tools.computer.clipboard import MemoryClipboard
+from src.llm.tools.computer.fakes import MemoryClipboard
 from src.llm.tools.computer.fakes import (
     RecordingPointer,
     ScriptedLocator,
@@ -40,7 +40,7 @@ from src.llm.tools.computer.overlay import (
     tooltip_placement,
     wrap_note,
 )
-from src.llm.tools.computer.pointer import (
+from src.llm.tools.computer.platforms.windows.pointer import (
     KeyEvent,
     MOUSEEVENTF_HWHEEL,
     MOUSEEVENTF_LEFTDOWN,

@@ -10,22 +10,106 @@
 - The `WebParser` tool (`src/llm/tools/parser/`) fetches web pages over HTTP, parses them with BeautifulSoup, and converts to Markdown.
 - The `ComputerUse` tool (`src/llm/tools/computer/`) gives the agent eyes and hands on the desktop: it finds on-screen elements from a plain-language description, drives the mouse and keyboard, and can point at an element with an on-screen tooltip instead of clicking it.
 
-## Quick Start
+## Installation
 
-1. Install dependencies using `uv`:
-   ```bash
-   uv sync
-   ```
-2. Create a `.env` file at the project root and specify your variables:
-   ```env
-   ENV=<value>
-   LLM_API_KEY=<key>
-   LLM_API_BASE=<base URL>
-   ```
-3. Start the agent:
-   ```bash
-   uv run python -m src.main
-   ```
+### Prerequisites
+
+- **[uv](https://docs.astral.sh/uv/getting-started/installation/)** — the only tool you install yourself. It manages the virtual environment, every dependency, **and Python itself**: the first `uv sync` downloads Python 3.12 (pinned in `.python-version`), so you do not need a system Python.
+- **[Git](https://git-scm.com/downloads)** — to clone the repository.
+- **NVIDIA GPU driver** (optional, Windows/Linux) — for GPU inference of the vision locator. The project uses CUDA 12.8 PyTorch wheels, which require a driver from the R570 series or newer: download at <https://www.nvidia.com/drivers>. You do **not** need to install the CUDA Toolkit — the wheels bundle the CUDA runtime; only the driver matters. Without an NVIDIA GPU everything still works on CPU (and on Apple Silicon the locator runs on Metal/MPS).
+
+The right PyTorch build is selected **automatically** per OS — `[tool.uv.sources]` in `pyproject.toml` routes `torch`/`torchvision` to the `pytorch-cu128` index on Windows, while Linux and macOS use the regular PyPI wheels (CUDA-bundled on Linux, MPS on macOS). No manual `pip install torch` on any platform.
+
+### Windows
+
+```powershell
+# 1. Install uv
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# 2. Clone the project
+git clone <repo-url> right-code
+cd right-code
+
+# 3. Create .env (see below)
+
+# 4. Install everything — pulls the CUDA 12.8 PyTorch build automatically
+uv sync
+
+# 5. Run the agent
+uv run python -m src.main
+```
+
+### Linux
+
+```bash
+# 1. Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 2. Clone the project
+git clone <repo-url> right-code
+cd right-code
+
+# 3. Create .env (see below)
+
+# 4. Install everything — PyPI torch bundles CUDA on Linux; CPU works without a GPU
+uv sync
+
+# 5. Run the agent
+uv run python -m src.main
+```
+
+The screen tools expect an X11 session; on Wayland, capture works through `mss`, input support varies by compositor. The clipboard needs `xclip` or `xsel` installed.
+
+### macOS
+
+```bash
+# 1. Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 2. Clone the project
+git clone <repo-url> right-code
+cd right-code
+
+# 3. Create .env (see below)
+
+# 4. Install everything — torch runs on Metal (MPS); CUDA does not exist on macOS
+uv sync
+
+# 5. Run the agent
+uv run python -m src.main
+```
+
+For the screen tools, grant your terminal two permissions in **System Settings → Privacy & Security**: **Accessibility** (mouse/keyboard control) and **Screen Recording** (capture).
+
+### .env
+
+Create a `.env` file at the repo root before the first run — importing `src.config.settings` fails without it:
+
+```env
+ENV=dev
+LLM_API_KEY=<your key>
+LLM_API_BASE=<OpenAI-compatible endpoint, e.g. https://openrouter.ai/api/v1>
+```
+
+### Verify the install
+
+```bash
+uv run python -m unittest discover -s tests   # runs in seconds; needs no GPU or desktop
+bash lint.sh                                  # black + flake8
+```
+
+### Platform support
+
+| Capability | Windows | macOS | Linux |
+| --- | --- | --- | --- |
+| Chat agent, web parser, run_tools sandbox | ✅ | ✅ | ✅ |
+| Vision locator | ✅ CUDA / CPU | ✅ MPS / CPU | ✅ CUDA / CPU |
+| Mouse + keyboard (`screen_click`, `screen_type`, `screen_key`) | ✅ native (SendInput) | ✅ portable (pynput) | ✅ portable (pynput, X11) |
+| Screen capture | ✅ | ✅ (needs permission) | ✅ (X11 / Wayland via mss) |
+| Clipboard (copy / paste) | ✅ Win32 | ✅ | ✅ (xclip / xsel) |
+| Window focus (`focus_window`) | ✅ | ❌ not yet | ❌ not yet |
+
+The OS backends live in `src/llm/tools/computer/platforms/` — native Win32 under `windows/`, a pynput/mss/pyperclip fallback under `portable/` — and are picked automatically at runtime.
 
 ## Architecture evaluation
 
@@ -74,7 +158,7 @@ catalog is unavailable).
   - `tools/` — the tool layer, one subpackage per concern:
     - `meta/` — the meta layer: `tool.py` (the `search_tools` / `get_tool` / `run_tools` meta tools), `registry.py` + `defaults.py` (the tool registry), `attachments.py` (the image channel out of a run), `sandbox/` (the Python-subset interpreter executing `run_tools` scripts);
     - `parser/` — web-page fetching (`service.py`: the `WebParser` class; `utils.py`; `tool.py`: the `web_search` `@tool`);
-    - `computer/` — screen understanding and desktop control (`service.py`: the `ComputerUse` facade; backends; `tool.py`: the `screen_*` `@tool`s — see below).
+    - `computer/` — screen understanding and desktop control (`service.py`: the `ComputerUse` facade; `tool.py`: the `screen_*` `@tool`s; `platforms/`: per-OS backends — native `windows/`, portable `portable/` for macOS/Linux — see below).
 - `test.py` — interactive screen-locator REPL built on `ComputerUse`.
 - Tests are located in `tests/`.
 

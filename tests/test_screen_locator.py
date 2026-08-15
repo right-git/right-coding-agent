@@ -12,13 +12,15 @@ from src.llm.tools.computer import (
     Detection,
     NullOverlay,
     box_center,
-    capture_primary_screen,
     clamp_point,
-    enable_dpi_awareness,
-    move_pointer,
     parse_detections,
-    primary_screen_size,
     select_targets,
+)
+from src.llm.tools.computer.platforms.windows.pointer import move_pointer
+from src.llm.tools.computer.platforms.windows.screen import (
+    capture_primary_screen,
+    enable_dpi_awareness,
+    primary_screen_size,
 )
 from src.llm.tools.computer.cli import parse_command, run_interactive_loop
 from src.llm.tools.computer.fakes import RecordingPointer, ScriptedLocator, StaticScreen
@@ -137,7 +139,7 @@ class ScreenAndPointerAdapterTests(unittest.TestCase):
         self.assertEqual(libraries.mock_calls, [])
 
     def test_default_move_pointer_requires_windows(self):
-        with patch("src.llm.tools.computer.pointer.sys.platform", "linux"):
+        with patch("src.llm.tools.computer.platforms.windows.pointer.sys.platform", "linux"):
             with self.assertRaisesRegex(RuntimeError, "requires Windows"):
                 move_pointer(12, 34)
 

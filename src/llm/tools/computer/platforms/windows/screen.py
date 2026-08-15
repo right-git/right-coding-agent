@@ -5,7 +5,7 @@ from typing import Any
 
 from PIL import Image, ImageGrab
 
-from .types import Size
+from ...types import Size
 
 SM_CXSCREEN = 0
 SM_CYSCREEN = 1

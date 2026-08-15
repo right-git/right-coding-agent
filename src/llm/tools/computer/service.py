@@ -24,9 +24,8 @@ from .detection import (
     select_targets,
     shift_box,
 )
+from . import platforms
 from .overlay import TkOverlay
-from .pointer import Pointer
-from .screen import PrimaryScreen, enable_dpi_awareness
 from .types import (
     Box,
     Detection,
@@ -81,11 +80,11 @@ class ComputerUse:
         cache_detections: bool = True,
     ) -> None:
         if dpi_aware:
-            enable_dpi_awareness()
+            platforms.enable_dpi_awareness()
 
         self._locator = locator
-        self.screen: ScreenBackend = screen or PrimaryScreen()
-        self.pointer: PointerBackend = pointer or Pointer()
+        self.screen: ScreenBackend = screen or platforms.default_screen()
+        self.pointer: PointerBackend = pointer or platforms.default_pointer()
         self.overlay: OverlayBackend = overlay or TkOverlay()
         self._clipboard = clipboard
         self.output_path = Path(output_path)
@@ -120,7 +119,7 @@ class ComputerUse:
 
     def active_window(self):
         """The window currently receiving keyboard input, or None."""
-        from .windows import foreground_window
+        from .platforms import foreground_window
 
         return foreground_window()
 
@@ -131,7 +130,7 @@ class ComputerUse:
         sequence that assumes the wrong window types into someone else's
         document.
         """
-        from .windows import focus_window
+        from .platforms import focus_window
 
         window = focus_window(title_contains)
         logger.info("Focused window [{}]", window.title)
@@ -468,9 +467,7 @@ class ComputerUse:
     def read_clipboard(self) -> str:
         """Current clipboard text."""
         if self._clipboard is None:
-            from .clipboard import Win32Clipboard
-
-            self._clipboard = Win32Clipboard()
+            self._clipboard = platforms.default_clipboard()
         return self._clipboard.read_text()
 
     def paste_text(self, text: str, *, settle: float = 0.15) -> None:
@@ -487,9 +484,7 @@ class ComputerUse:
 
     def write_clipboard(self, text: str) -> None:
         if self._clipboard is None:
-            from .clipboard import Win32Clipboard
-
-            self._clipboard = Win32Clipboard()
+            self._clipboard = platforms.default_clipboard()
         self._clipboard.write_text(text)
 
     def copy(self, *, settle: float = 0.15) -> str:

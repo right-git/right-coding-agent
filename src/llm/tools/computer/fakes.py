@@ -101,3 +101,20 @@ class ScriptedLocator:
         if not self.responses:
             return []
         return list(self.responses[index])
+
+
+class MemoryClipboard:
+    """Clipboard double for dry runs and tests."""
+
+    def __init__(self, text: str = "") -> None:
+        self.text = text
+        self.reads = 0
+        self.writes: list[str] = []
+
+    def read_text(self) -> str:
+        self.reads += 1
+        return self.text
+
+    def write_text(self, text: str) -> None:
+        self.text = text
+        self.writes.append(text)

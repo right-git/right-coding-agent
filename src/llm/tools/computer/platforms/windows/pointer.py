@@ -6,7 +6,7 @@ from ctypes import wintypes
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-from .types import MouseButton, Point, ScrollDirection
+from ...types import MouseButton, Point, ScrollDirection
 
 INPUT_MOUSE = 0
 INPUT_KEYBOARD = 1
