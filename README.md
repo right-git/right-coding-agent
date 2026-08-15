@@ -172,7 +172,9 @@ catalog is unavailable).
   - `middlewares/` — agent middlewares (`attachments.py`: screenshots as vision messages; `message_log.py`: JSON request/response logging);
   - `tools/` — the tool layer, one subpackage per concern:
     - `meta/` — the meta layer: `tool.py` (the `search_tools` / `get_tool` / `run_tools` meta tools), `registry.py` + `defaults.py` (the tool registry), `attachments.py` (the image channel out of a run), `sandbox/` (the Python-subset interpreter executing `run_tools` scripts);
-    - `parser/` — web-page fetching (`service.py`: the `WebParser` class; `utils.py`; `tool.py`: the `web_search` `@tool`);
+    - `parser/` — the web (`service.py`: the `WebParser` class; `utils.py`; `tool.py`: the `web_fetch` and `web_search` `@tool`s);
+    - `files/` — coding file tools (`service.py`: `FileService`; `tool.py`: `read_file`, `write_file`, `edit_file`, `glob_files`, `grep_files`);
+    - `shell/` — command execution (`service.py`: `CommandRunner`; `tool.py`: `bash`);
     - `computer/` — screen understanding and desktop control (`service.py`: the `ComputerUse` facade; `tool.py`: the `screen_*` `@tool`s; `platforms/`: per-OS backends — native `windows/`, portable `portable/` for macOS/Linux — see below).
 - `test.py` — interactive screen-locator REPL built on `ComputerUse`.
 - Tests are located in `tests/`.
@@ -184,7 +186,8 @@ round-trip per call. Instead, only three meta tools are wired into the agent
 (`src/llm/tools/meta/tool.py`):
 
 1. `search_tools("click button screen")` — keyword search over the tool
-   registry (currently `web_search` plus the `screen_*` tools);
+   registry (web: `web_fetch`, `web_search`; coding: `read_file`, `write_file`,
+   `edit_file`, `glob_files`, `grep_files`, `bash`; desktop: the `screen_*` tools);
 2. `get_tool(["screen_click", "screen_type"])` — full contracts of one or
    more tools in a single call;
 3. `run_tools(code)` — a Python-subset script, executed server-side by the
@@ -196,7 +199,7 @@ round-trip per call. Instead, only three meta tools are wired into the agent
    while status == "running":
        sleep(5)                # token-free polling
        status = job_status("j1")
-   pages = parallel(web_search("https://a"), web_search("https://b"))
+   pages = parallel(web_fetch("https://a"), web_fetch("https://b"))
    return [page[:200] for page in pages]
    ```
 

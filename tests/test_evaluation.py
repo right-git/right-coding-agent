@@ -23,7 +23,14 @@ from src.llm.tools.computer.fakes import (
 )
 
 EXPECTED_DIRECT_NAMES = [
+    "web_fetch",
     "web_search",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "glob_files",
+    "grep_files",
+    "bash",
     "screen_locate",
     "screen_screenshot",
     "screen_mark",

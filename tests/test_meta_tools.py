@@ -301,7 +301,14 @@ class DefaultRegistryTests(unittest.TestCase):
         self.assertEqual(
             names,
             [
+                "web_fetch",
                 "web_search",
+                "read_file",
+                "write_file",
+                "edit_file",
+                "glob_files",
+                "grep_files",
+                "bash",
                 "screen_locate",
                 "screen_screenshot",
                 "screen_mark",

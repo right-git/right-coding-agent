@@ -17,7 +17,7 @@ from collections.abc import Sequence
 
 from langchain_core.tools import BaseTool, StructuredTool
 
-from src.llm.tools import COMPUTER_TOOLS, collecting_images, web_search
+from src.llm.tools import COMPUTER_TOOLS, FILE_TOOLS, bash, collecting_images, web_fetch, web_search
 
 
 def as_direct_tool(tool_obj: BaseTool) -> BaseTool:
@@ -37,7 +37,7 @@ def as_direct_tool(tool_obj: BaseTool) -> BaseTool:
     )
 
 
-DIRECT_TOOLS = [as_direct_tool(tool_obj) for tool_obj in [web_search, *COMPUTER_TOOLS]]
+DIRECT_TOOLS = [as_direct_tool(tool_obj) for tool_obj in [web_fetch, web_search, *FILE_TOOLS, bash, *COMPUTER_TOOLS]]
 
 
 def schema_token_estimate(tools: Sequence[BaseTool]) -> int:

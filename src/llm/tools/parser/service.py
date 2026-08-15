@@ -137,6 +137,16 @@ class WebParser:
 
         return result
 
+    async def search_web(self, query: str, *, max_results: int = 8) -> list[dict]:
+        """Top DuckDuckGo results for `query` as raw result dicts."""
+        from ddgs import DDGS
+
+        def run() -> list[dict]:
+            with DDGS() as client:
+                return list(client.text(query, max_results=max_results))
+
+        return await asyncio.to_thread(run)
+
     async def parse_page(self, url: str) -> str:
         """The page at `url` as Markdown text; always a string.
 

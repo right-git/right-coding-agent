@@ -4,10 +4,10 @@
   `get_tool` / `run_tools`), the `ToolRegistry` behind them, the default
   registry, the image-attachment channel, and the `sandbox/` interpreter
   that executes `run_tools` scripts;
-- `parser/`, `computer/` — concrete capabilities, each with the fixed shape
-  `tool.py` (the `@tool` functions the LLM receives) + `service.py` (the
-  class doing the real work) + optional `utils.py`; new tools follow the
-  same pattern and get registered in `meta/defaults.py`.
+- `parser/`, `computer/`, `files/`, `shell/` — concrete capabilities, each
+  with the fixed shape `tool.py` (the `@tool` functions the LLM receives) +
+  `service.py` (the class doing the real work) + optional `utils.py`; new
+  tools follow the same pattern and get registered in `meta/defaults.py`.
 
 Instrumentation of the layer (the script tool-call counter) lives in
 `src.llm.statistics`.
@@ -19,6 +19,7 @@ from .computer.tool import (
     set_computer,
     warm_up_computer,
 )
+from .files.tool import FILE_TOOLS, edit_file, glob_files, grep_files, read_file, write_file
 from .meta.attachments import attach_image, collecting_images
 from .meta.defaults import get_registry, set_registry
 from .meta.registry import RESERVED_SCRIPT_NAMES, ToolRegistry
@@ -30,24 +31,33 @@ from .meta.tool import (
     run_tools,
     search_tools,
 )
-from .parser.tool import web_search
+from .parser.tool import web_fetch, web_search
+from .shell.tool import bash
 
 __all__ = [
     "COMPUTER_TOOLS",
+    "FILE_TOOLS",
     "MAX_ATTACHED_IMAGES",
     "MAX_RESULT_CHARS",
     "META_TOOLS",
     "RESERVED_SCRIPT_NAMES",
     "ToolRegistry",
     "attach_image",
+    "bash",
     "collecting_images",
+    "edit_file",
     "get_computer",
     "get_registry",
     "get_tool",
+    "glob_files",
+    "grep_files",
+    "read_file",
     "run_tools",
     "search_tools",
     "set_computer",
     "set_registry",
     "warm_up_computer",
+    "web_fetch",
     "web_search",
+    "write_file",
 ]
