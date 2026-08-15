@@ -289,6 +289,12 @@ class VoiceController:
         except Exception:
             logger.exception("Failed to queue streamed text for speech")
 
+    def cancel_turn(self) -> None:
+        """A cancelled turn must not speak its tail: drop everything buffered."""
+        self._interrupt_speech()
+        self._buffer = SentenceBuffer()
+        self._filter = SpeakableFilter()
+
     def finish_turn(self) -> None:
         """Flush the sentence tail and reset per-turn markdown state."""
         try:

@@ -163,7 +163,9 @@ While a turn runs, the terminal shows live progress, Claude-Code-style: a
 stopwatch for the current phase (`thinking… 12s` / `running tools… 3s`), every
 tool call and its result printed the moment they happen (results carry their
 duration), a dim `✻ thought for Ns` line before each action, and a tail of the
-answer as it streams in.
+answer as it streams in. Press **Esc** to cancel the running request (Windows
+console): the in-flight call is aborted, history rolls back to before the turn,
+and anything you typed meanwhile reappears in the next prompt.
 
 After every response a dim footer reports what the turn cost:
 

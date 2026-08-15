@@ -17,7 +17,7 @@ class ChatUIInputTests(unittest.IsolatedAsyncioTestCase):
         value = await ui.get_input()
 
         self.assertEqual(value, "hello")
-        ui.prompt_session.prompt_async.assert_awaited_once_with("> ")
+        ui.prompt_session.prompt_async.assert_awaited_once_with("> ", default="")
 
     async def test_get_input_returns_quit_on_interrupt(self):
         ui = ChatUI(model="openai/gpt-5.1-codex-mini")

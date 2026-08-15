@@ -1,3 +1,4 @@
+import asyncio
 import os
 import time
 from contextlib import contextmanager
@@ -50,6 +51,7 @@ class ChatUI:
         self.sound_enabled = True
         self.voice = None  # VoiceController once /voice enables it
         self.model_status: dict[str, tuple[str, float]] = {}  # name → (state, monotonic when set)
+        self._type_ahead = ""  # keys typed during a turn, returned to the next prompt
         self.commands = CommandHandler(self)
 
     def set_model_catalog(self, catalog: dict[str, ModelInfo] | None) -> None:
@@ -233,11 +235,47 @@ class ChatUI:
                 # the way typed input would look and use it as the message.
                 self.console.print(f"> {pending}", style="user.prompt", markup=False, highlight=False)
                 return pending
+        default, self._type_ahead = self._type_ahead, ""
         try:
-            return await self._get_prompt_session().prompt_async("> ")
+            return await self._get_prompt_session().prompt_async("> ", default=default)
         except (EOFError, KeyboardInterrupt):
             self.console.print()
             return "/quit"
+
+    async def run_cancellable(self, coroutine, watcher=None):
+        """Await a turn while watching the console for Esc; Esc cancels it.
+
+        Raises `TurnCancelled` on Esc. Keys the watcher consumed come back as
+        type-ahead in the next prompt. Without a console watcher (non-Windows,
+        redirected stdin) the turn simply runs to completion.
+        """
+        from src.ui.interrupt import EscapeWatcher, TurnCancelled
+
+        watcher = watcher or EscapeWatcher.create()
+        if watcher is None:
+            return await coroutine
+        task = asyncio.ensure_future(coroutine)
+        try:
+            with watcher:
+                while True:
+                    done, _ = await asyncio.wait({task}, timeout=0.1)
+                    if done:
+                        return task.result()
+                    if watcher.pressed.is_set():
+                        break
+        finally:
+            self._type_ahead += watcher.typed_text
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        raise TurnCancelled()
+
+    def cancel_voice_turn(self) -> None:
+        """Drop any buffered/playing speech of a cancelled turn."""
+        if self.voice is not None:
+            self.voice.cancel_turn()
 
     def handle_command(self, text: str) -> str | None:
         """Dispatch a slash command; returns "clear" when history must reset."""

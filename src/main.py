@@ -14,6 +14,7 @@ from src.llm.utils import (
     trim_incomplete_tool_calls,
 )
 from src.ui import ChatUI
+from src.ui.interrupt import TurnCancelled
 
 # The startup model comes from .env (LLM_DEFAULT_MODEL); /model can switch
 # to anything else at runtime.
@@ -125,14 +126,16 @@ async def process_user_turn(
     try:
         with ui.turn_stream() as stream:
             on_message, on_token = turn_callbacks(ui, stream)
-            response = await agents.right_coding_agent(
-                messages=working_messages,
-                model=model,
-                reasoning_effort=reasoning_effort,
-                temperature=temperature,
-                voice_mode=voice_mode,
-                on_message=on_message,
-                on_token=on_token,
+            response = await ui.run_cancellable(
+                agents.right_coding_agent(
+                    messages=working_messages,
+                    model=model,
+                    reasoning_effort=reasoning_effort,
+                    temperature=temperature,
+                    voice_mode=voice_mode,
+                    on_message=on_message,
+                    on_token=on_token,
+                )
             )
         if stream is not None:
             printed_ids |= stream.printed_ids
@@ -151,14 +154,16 @@ async def process_user_turn(
             ]
             with ui.turn_stream() as stream:
                 on_message, on_token = turn_callbacks(ui, stream)
-                response = await agents.right_coding_agent(
-                    messages=retry_messages,
-                    model=model,
-                    reasoning_effort=reasoning_effort,
-                    temperature=temperature,
-                    voice_mode=voice_mode,
-                    on_message=on_message,
-                    on_token=on_token,
+                response = await ui.run_cancellable(
+                    agents.right_coding_agent(
+                        messages=retry_messages,
+                        model=model,
+                        reasoning_effort=reasoning_effort,
+                        temperature=temperature,
+                        voice_mode=voice_mode,
+                        on_message=on_message,
+                        on_token=on_token,
+                    )
                 )
             if stream is not None:
                 printed_ids |= stream.printed_ids
@@ -229,6 +234,11 @@ async def process_user_turn(
         ui.finish_voice_turn()
         ui.notify_done()
         return finalize_turn_history(trimmed_messages)
+    except TurnCancelled:
+        logger.info("Turn cancelled by user model [{}]", model)
+        ui.cancel_voice_turn()
+        ui.print_warning("request cancelled (Esc)")
+        return base_messages
     except Exception as e:
         logger.exception(
             "User turn failed model [{}] message_chars [{}]",

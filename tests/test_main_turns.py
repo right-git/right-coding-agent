@@ -17,6 +17,7 @@ class ProcessUserTurnTests(unittest.IsolatedAsyncioTestCase):
 
         ui = Mock()
         ui.turn_stream.return_value = nullcontext()
+        ui.run_cancellable = lambda coro: coro
 
         with patch("src.main.logger") as logger:
             updated_messages = await process_user_turn(
@@ -56,6 +57,7 @@ class ProcessUserTurnTests(unittest.IsolatedAsyncioTestCase):
 
         ui = Mock()
         ui.turn_stream.return_value = nullcontext()
+        ui.run_cancellable = lambda coro: coro
         ui.has_visible_output.return_value = False
 
         with patch("src.main.logger") as logger:
@@ -82,6 +84,7 @@ class ProcessUserTurnTests(unittest.IsolatedAsyncioTestCase):
 
         ui = Mock()
         ui.turn_stream.return_value = nullcontext()
+        ui.run_cancellable = lambda coro: coro
         ui.has_visible_output.return_value = True
 
         with patch("src.main.logger"):
@@ -128,6 +131,7 @@ class EmptyResponseRetryTests(unittest.IsolatedAsyncioTestCase):
     def make_ui(self):
         ui = Mock()
         ui.turn_stream.return_value = nullcontext()
+        ui.run_cancellable = lambda coro: coro
         ui.has_visible_output.return_value = True
         return ui
 
@@ -232,6 +236,7 @@ class UsageReportingTests(unittest.IsolatedAsyncioTestCase):
 
         ui = Mock()
         ui.turn_stream.return_value = nullcontext()
+        ui.run_cancellable = lambda coro: coro
         ui.has_visible_output.return_value = True
 
         info = ModelInfo(
@@ -277,6 +282,7 @@ class UsageReportingTests(unittest.IsolatedAsyncioTestCase):
 
         ui = Mock()
         ui.turn_stream.return_value = nullcontext()
+        ui.run_cancellable = lambda coro: coro
         ui.has_visible_output.return_value = True
 
         with patch("src.main.logger"):
