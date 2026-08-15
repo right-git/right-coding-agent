@@ -28,7 +28,7 @@ class WelcomeTests(unittest.TestCase):
         ui.print_welcome()
 
         rendered = ui.console.export_text()
-        self.assertIn("Right Code", rendered)
+        self.assertIn("Chattler.AI Open Source", rendered)
         self.assertIn("google/gemini-3.7-flash", rendered)
         self.assertIn(os.path.basename(os.getcwd()), rendered)
         self.assertIn("logs.log", rendered)

@@ -26,15 +26,39 @@ class RecordingSpawner:
         self.commands.append(list(command))
 
 
+class RecordingSender:
+    """Scripted stand-in for winmm's mciSendStringW."""
+
+    def __init__(self, fail_on: str | None = None):
+        self.commands: list[str] = []
+        self.fail_on = fail_on
+
+    def __call__(self, command, buffer, length, callback):
+        self.commands.append(command)
+        return 1 if self.fail_on and command.startswith(self.fail_on) else 0
+
+
+class WindowsMciTests(unittest.TestCase):
+    def test_playback_closes_opens_and_plays_in_process(self):
+        sender = RecordingSender()
+
+        started = play_done_sound(DONE_SOUND, platform="win32", sender=sender)
+
+        self.assertTrue(started)
+        self.assertEqual(len(sender.commands), 3)
+        self.assertTrue(sender.commands[0].startswith("close"))
+        self.assertIn(str(DONE_SOUND), sender.commands[1])
+        self.assertIn("type mpegvideo", sender.commands[1])
+        self.assertTrue(sender.commands[2].startswith("play"))
+        self.assertIn("from 0", sender.commands[2])
+
+    def test_open_failure_reports_false(self):
+        sender = RecordingSender(fail_on="open")
+
+        self.assertFalse(play_done_sound(DONE_SOUND, platform="win32", sender=sender))
+
+
 class BuildCommandTests(unittest.TestCase):
-    def test_windows_uses_a_hidden_powershell_media_player(self):
-        command = build_command(Path("C:/x/done.mp3"), platform="win32")
-
-        self.assertEqual(command[0], "powershell")
-        self.assertIn("-WindowStyle", command)
-        self.assertIn("MediaPlayer", command[-1])
-        self.assertIn("done.mp3", command[-1])
-
     def test_macos_uses_afplay(self):
         command = build_command(Path("/x/done.mp3"), platform="darwin")
 

@@ -135,7 +135,7 @@ class ChatUI:
         info.add_row("logs", "logs.log")
         info.add_row("vision", "nvidia/LocateAnything-3B · loads in background")
         body = Group(
-            Text("✻ Right Code", style="bold magenta"),
+            Text("✻  Chattler.AI Open Source", style="bold magenta"),
             Text(""),
             info,
             Text(""),
