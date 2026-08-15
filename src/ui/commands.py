@@ -52,6 +52,8 @@ class CommandHandler:
             return self._switch_temperature(argument)
         if command == "/paste":
             return self._paste_image()
+        if command == "/sound":
+            return self._toggle_sound(argument)
         if command in ("/log-level", "/loglevel"):
             return self._switch_log_level(argument) if argument else self._print_log_level()
         if command == "/clear":
@@ -73,6 +75,7 @@ class CommandHandler:
             ("/effort [level]", f"reasoning effort: {', '.join(EFFORT_LEVELS)}, or none"),
             ("/temperature [value]", "sampling temperature 0..2, or none"),
             ("/paste", "attach an image from the clipboard (also Ctrl+V in many terminals)"),
+            ("/sound [on|off]", "toggle the completion sound"),
             ("/log-level [name]", "show or change the log level"),
             ("/clear", "clear screen and history"),
             ("/quit", "exit"),
@@ -312,6 +315,19 @@ class CommandHandler:
             f"{len(self.ui.pending_images)} image(s) will go with your next message",
             style="success",
         )
+        return None
+
+    def _toggle_sound(self, argument: str) -> None:
+        value = argument.lower()
+        if value in ("on", "off"):
+            self.ui.sound_enabled = value == "on"
+        elif value:
+            self.console.print(f"  invalid value: {argument} (use /sound, /sound on, or /sound off)", style="error")
+            return None
+        else:
+            self.ui.sound_enabled = not self.ui.sound_enabled
+        state = "on" if self.ui.sound_enabled else "off"
+        self.console.print(f"  completion sound {state}", style="success")
         return None
 
     # -------------------------------------------------------------- logging

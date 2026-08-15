@@ -189,6 +189,7 @@ async def process_user_turn(
                 previous_ids=previous_ids,
                 duration=time.perf_counter() - started,
             )
+            ui.notify_done()
             return compact_finished_turn(trimmed_messages)
 
         if printed_ids:
@@ -204,6 +205,7 @@ async def process_user_turn(
             previous_ids=previous_ids,
             duration=time.perf_counter() - started,
         )
+        ui.notify_done()
         return compact_finished_turn(trimmed_messages)
     except Exception as e:
         logger.exception(

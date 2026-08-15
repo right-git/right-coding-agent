@@ -13,6 +13,7 @@ from rich.panel import Panel
 from src.ui.clipboard import encode_image, grab_clipboard_image
 from src.ui.commands import CommandHandler
 from src.ui.completer import CommandCompleter
+from src.ui.sound import play_done_sound
 from src.ui.stream import TurnStream
 from rich.table import Table
 from rich.text import Text
@@ -45,6 +46,7 @@ class ChatUI:
         self.reasoning_effort: str | None = None
         self.temperature: float | None = None
         self.pending_images: list[dict] = []
+        self.sound_enabled = True
         self.commands = CommandHandler(self)
 
     def set_model_catalog(self, catalog: dict[str, ModelInfo] | None) -> None:
@@ -336,6 +338,11 @@ class ChatUI:
         stream = TurnStream(self)
         with Live(stream, console=self.console, refresh_per_second=10, transient=True):
             yield stream
+
+    def notify_done(self) -> None:
+        """Play the completion sound, when enabled."""
+        if self.sound_enabled:
+            play_done_sound()
 
     def print_error(self, error: Exception):
         self.console.print(f"  error: {error}", style="error")
