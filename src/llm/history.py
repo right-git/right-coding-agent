@@ -9,8 +9,13 @@ keep riding along with every future model call.
 `compact_finished_turn` rewrites the just-finished turn's tool tail into
 one synthetic `run_tools` pair — the merged scripts as the call, counts
 plus trimmed result heads as the output — cutting a heavy tool turn from
-thousands of tokens to a few hundred. `search_tools`/`get_tool` results are
-pure discovery noise and survive only as counters. Earlier turns are never
+thousands of tokens to a few hundred. `search_tools` results are discovery
+noise and survive only as counters, but `get_tool` contracts are carried in
+the recap verbatim (capped): they are durable knowledge, and dropping them
+makes the model re-discover the same tools next turn — two extra model
+round-trips at full context, far dearer than the ~1k tokens the contracts
+cost. This self-regulates: once contracts are visible in history the model
+stops calling `get_tool`, and later recaps add none. Earlier turns are never
 rewritten, so provider prompt caching keeps its stable prefix; attached
 screenshot messages are passed through untouched (image pruning is a
 separate concern).
@@ -25,9 +30,12 @@ from src.llm.middlewares.message_log import scrub_text
 
 RECAP_CODE_CHARS = 2_000
 RECAP_RESULT_CHARS = 1_500
+RECAP_CONTRACT_CHARS = 6_000
 RESULT_SLICE_CHARS = 300
 SCRIPT_SEPARATOR = "\n# --- next script ---\n"
-NOISE_TOOLS = frozenset({"search_tools", "get_tool"})
+CONTRACT_SEPARATOR = "\n\n---\n\n"
+NOISE_TOOLS = frozenset({"search_tools"})
+CONTRACT_TOOL = "get_tool"
 RECAP_MARKER = "tool_recap"
 
 
@@ -87,6 +95,7 @@ def compact_finished_turn(messages: list) -> list:
     call_kinds: dict[str, str] = {}  # tool_call_id -> tool name
     image_messages: list[HumanMessage] = []
     result_slices: list[str] = []
+    contracts: list[str] = []
 
     for message in tail:
         if isinstance(message, AIMessage) and message.tool_calls:
@@ -101,6 +110,11 @@ def compact_finished_turn(messages: list) -> list:
                         scripts.append(code.strip())
         elif isinstance(message, ToolMessage):
             name = message.name or call_kinds.get(message.tool_call_id, "")
+            if name == CONTRACT_TOOL:
+                contract = str(message.content).strip()
+                if contract and contract not in contracts:
+                    contracts.append(contract)
+                continue
             if name in NOISE_TOOLS:
                 continue
             preview = scrub_text(" ".join(str(message.content).split()), RESULT_SLICE_CHARS)
@@ -121,6 +135,10 @@ def compact_finished_turn(messages: list) -> list:
     if not merged_code:
         merged_code = "# (no run_tools scripts this turn)"
     digest = f"recap of {len(call_names)} tool call(s): {counts_line}"
+    if contracts:
+        digest += "\ntool contracts (kept — call get_tool only for tools not listed here):\n" + _clip(
+            CONTRACT_SEPARATOR.join(contracts), RECAP_CONTRACT_CHARS
+        )
     if result_slices:
         digest += "\nresults (trimmed):\n" + _clip("\n".join(result_slices), RECAP_RESULT_CHARS)
 
