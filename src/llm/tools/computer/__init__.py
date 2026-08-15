@@ -42,6 +42,7 @@ from .tool import (
     screen_screenshot,
     screen_scroll,
     screen_type,
+    set_activity_listener,
     set_computer,
     warm_up_computer,
 )
@@ -90,6 +91,7 @@ __all__ = [
     "screen_scroll",
     "screen_type",
     "select_targets",
+    "set_activity_listener",
     "set_computer",
     "warm_up_computer",
 ]

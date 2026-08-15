@@ -40,8 +40,10 @@ class VoiceController:
         listener=None,
         loop=None,
         step_interval: float = STEP_INTERVAL,
+        status_overlay=None,
     ):
         self.ui = ui
+        self._status_overlay = status_overlay
         self.started = False  # push-to-talk running (listener + workers)
         self.speak_replies = False  # /voice: read answers aloud
         self.key_spec = "alt_r"
@@ -115,6 +117,19 @@ class VoiceController:
         self._draft = ""
         self._buffer = SentenceBuffer()
         self._filter = SpeakableFilter()
+        self._set_overlay_voice(None)
+
+    def _set_overlay_voice(self, state: str | None) -> None:
+        """Update the on-screen voice pill (listening/syncing/hidden)."""
+        try:
+            overlay = self._status_overlay
+            if overlay is None:
+                from src.ui.overlay import get_status_overlay
+
+                overlay = self._status_overlay = get_status_overlay()
+            overlay.set_voice(state)
+        except Exception:
+            logger.exception("Status overlay update failed")
 
     def _build_components(self) -> None:
         from src.config.settings import settings
@@ -183,6 +198,7 @@ class VoiceController:
         self._record_worker = threading.Thread(target=self._record_loop, daemon=True)
         self._record_worker.start()
         logger.info("PTT: recording started")
+        self._set_overlay_voice("listening")
         self._invalidate()
 
     def _record_loop(self) -> None:
@@ -213,6 +229,7 @@ class VoiceController:
             len(text),
         )
         self._draft = ""
+        self._set_overlay_voice("syncing" if text else None)
         self._invalidate()
         if text:
             self._submit(text)
@@ -302,6 +319,7 @@ class VoiceController:
         self._interrupt_speech()
         self._buffer = SentenceBuffer()
         self._filter = SpeakableFilter()
+        self._set_overlay_voice(None)
 
     def finish_turn(self) -> None:
         """Flush the sentence tail and reset per-turn markdown state."""
@@ -312,6 +330,7 @@ class VoiceController:
         except Exception:
             logger.exception("Failed to flush speech at turn end")
         self._filter = SpeakableFilter()
+        self._set_overlay_voice(None)  # ответ пришёл — «syncing» снимается
 
     def _enqueue(self, sentence: str) -> None:
         speakable = self._filter.filter(sentence)

@@ -9,6 +9,26 @@ from .service import ComputerUse
 from ..meta.attachments import attach_image
 
 _computer: ComputerUse | None = None
+_activity_listener = None
+
+
+def set_activity_listener(listener) -> None:
+    """UI hook fired whenever a screen tool starts working with the desktop.
+
+    The chat UI wires this to the status overlay's border ("the AI is driving
+    your computer — hands off"); tests and library use leave it unset.
+    """
+    global _activity_listener
+    _activity_listener = listener
+
+
+def _ping_activity() -> None:
+    if _activity_listener is None:
+        return
+    try:
+        _activity_listener()
+    except Exception:
+        pass  # indication must never break a tool call
 
 
 def get_computer() -> ComputerUse:
@@ -86,6 +106,7 @@ async def screen_locate(description: str, return_screen: bool = False) -> str:
         you can see.
     """
     try:
+        _ping_activity()
         computer = get_computer()
         detections = await asyncio.to_thread(computer.locate_object, description)
         text = computer.describe(detections)
@@ -120,6 +141,7 @@ async def screen_screenshot(return_base64: bool = False, max_side: int = 1280) -
         image. With return_base64 the raw base64 JPEG is appended.
     """
     try:
+        _ping_activity()
         computer = get_computer()
         encoded = await asyncio.to_thread(lambda: computer.screenshot_base64(max_side=max_side))
         attached = attach_image(encoded, "image/jpeg", label="screenshot")
@@ -165,6 +187,7 @@ async def screen_mark(description: str, note: str, title: str = "", match: int =
         nothing matched.
     """
     try:
+        _ping_activity()
         computer = get_computer()
         detections = await asyncio.to_thread(computer.locate_object, description)
         target, report = _resolve_match(computer, description, detections, match, action="mark")
@@ -204,6 +227,7 @@ async def screen_click(description: str, double: bool = False, match: int = 0) -
         matched.
     """
     try:
+        _ping_activity()
         computer = get_computer()
         detections = await asyncio.to_thread(computer.locate_object, description)
         target, report = _resolve_match(computer, description, detections, match, action="click")
@@ -230,6 +254,7 @@ async def screen_type(text: str) -> str:
         Confirmation of how much text was typed.
     """
     try:
+        _ping_activity()
         await asyncio.to_thread(get_computer().type_text, text)
         return f"Typed {len(text)} characters."
     except Exception as error:
@@ -252,6 +277,7 @@ async def screen_key(combination: str) -> str:
         Confirmation of the pressed keys.
     """
     try:
+        _ping_activity()
         await asyncio.to_thread(get_computer().key, combination)
         return f"Pressed {combination}."
     except Exception as error:
@@ -273,6 +299,7 @@ async def screen_scroll(direction: str, amount: int = 3) -> str:
         Confirmation of the scroll.
     """
     try:
+        _ping_activity()
         await asyncio.to_thread(get_computer().scroll, direction, amount)
         return f"Scrolled {direction} by {amount}."
     except Exception as error:

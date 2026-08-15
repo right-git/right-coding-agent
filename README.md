@@ -144,6 +144,13 @@ send, so you know the model is working even when the terminal is not visible
 (silence after the second press means nothing was recognized; the chime respects
 `/sound`). The ASR model warms up in the background at startup.
 
+**On-screen indication** works over any app, games included: while you talk, an
+animated pill with level bars floats at the bottom of the screen; after you send,
+it switches to pulsing "syncing" dots until the reply lands. While the agent
+drives your computer (screen tools), a breathing red frame glows around the
+screen edges — a "hands off, the AI is working" signal, fading a few seconds
+after the last action.
+
 **`/voice on` adds spoken replies**: the answer is spoken sentence-by-sentence
 (local Silero TTS, Russian voices; `VOICE_TTS_SPEAKER` selects the voice) while the
 model is still streaming, and the system prompt switches to a "plain speakable

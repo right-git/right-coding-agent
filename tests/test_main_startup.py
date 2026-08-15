@@ -18,6 +18,9 @@ class MainStartupTests(unittest.IsolatedAsyncioTestCase):
             patch("src.main.ChatUI", return_value=ui),
             patch("src.main.OpenRouterCatalog", return_value=catalog),
             patch("src.main.preload_vision_model"),
+            # Иначе main() навесит реальный оверлей-слушатель на screen-тулзы,
+            # и следующие тесты стартовали бы настоящее Tk-окно.
+            patch("src.llm.tools.computer.set_activity_listener"),
             patch("src.llm.agents.Agents") as agents_cls,
         ):
             agents_cls.return_value = Mock()

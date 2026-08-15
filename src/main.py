@@ -280,6 +280,15 @@ async def main():
     except Exception:
         logger.exception("Push-to-talk startup failed")
         ui.print_warning("push-to-talk unavailable (see logs.log)")
+    try:
+        # The breathing screen border while the agent drives the desktop:
+        # every screen tool pings the status overlay.
+        from src.llm.tools.computer import set_activity_listener
+        from src.ui.overlay import get_status_overlay
+
+        set_activity_listener(lambda: get_status_overlay().ping_computer())
+    except Exception:
+        logger.exception("Status overlay wiring failed")
     ui.print_welcome()
 
     async def load_catalog() -> None:

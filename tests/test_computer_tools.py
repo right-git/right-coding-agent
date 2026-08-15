@@ -16,6 +16,7 @@ from src.llm.tools.computer import (
     screen_mark,
     screen_scroll,
     screen_type,
+    set_activity_listener,
     set_computer,
 )
 from src.llm.tools.computer import ComputerUse, Detection, NullOverlay
@@ -47,6 +48,17 @@ class ComputerToolTests(unittest.IsolatedAsyncioTestCase):
         )
         set_computer(computer)
         return computer
+
+    async def test_screen_tools_ping_the_activity_listener(self):
+        self.install([])
+        pings = []
+        set_activity_listener(lambda: pings.append(1))
+        self.addCleanup(set_activity_listener, None)
+
+        await screen_type.ainvoke({"text": "hi"})
+        await screen_key.ainvoke({"combination": "ctrl+a"})
+
+        self.assertEqual(len(pings), 2)
 
     def test_every_tool_is_registered_with_a_stable_name(self):
         self.assertEqual(

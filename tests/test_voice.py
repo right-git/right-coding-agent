@@ -430,6 +430,18 @@ class FakeVoicePlayer:
         self.stopped = True
 
 
+class FakeStatusOverlay:
+    def __init__(self):
+        self.voice_states = []
+        self.pings = 0
+
+    def set_voice(self, state):
+        self.voice_states.append(state)
+
+    def ping_computer(self, linger=3.0):
+        self.pings += 1
+
+
 class VoiceControllerTests(unittest.TestCase):
     def make_controller(self, text="привет мир"):
         from src.ui.voice import VoiceController
@@ -443,6 +455,7 @@ class VoiceControllerTests(unittest.TestCase):
             player=FakeVoicePlayer(),
             listener=FakeHotkeyListener(),
             step_interval=999,
+            status_overlay=FakeStatusOverlay(),
         )
 
     def test_toggle_records_then_submits_the_transcript(self):
@@ -539,6 +552,30 @@ class VoiceControllerTests(unittest.TestCase):
         self.assertTrue(controller._sentences.empty())
         self.assertFalse(controller._recording)
 
+    def test_overlay_walks_listening_syncing_hidden(self):
+        controller = self.make_controller()
+        controller.started = True
+        overlay = controller._status_overlay
+
+        controller.toggle()  # запись
+        with patch("src.ui.sound.play_done_sound"):
+            controller.toggle()  # стоп + отправка
+        controller.finish_turn()  # ответ пришёл
+        self.addCleanup(controller.shutdown)
+
+        self.assertEqual(overlay.voice_states, ["listening", "syncing", None])
+
+    def test_overlay_hides_when_nothing_was_recognized(self):
+        controller = self.make_controller()
+        controller._transcriber = WhisperTranscriber(loader=lambda: FakeWhisperModel([[]]))
+        controller.started = True
+        overlay = controller._status_overlay
+
+        controller.toggle()
+        controller.toggle()
+
+        self.assertEqual(overlay.voice_states, ["listening", None])
+
     def test_voice_off_mutes_replies_but_keeps_push_to_talk(self):
         controller = self.make_controller()
         controller.started = True
@@ -553,6 +590,35 @@ class VoiceControllerTests(unittest.TestCase):
         controller.toggle()  # push-to-talk всё ещё работает
         self.addCleanup(controller.shutdown)
         self.assertTrue(controller._recording)
+
+
+class StatusOverlayTests(unittest.TestCase):
+    def test_voice_state_and_border_deadline(self):
+        from src.ui.overlay import StatusOverlay
+
+        overlay = StatusOverlay()
+        overlay._apply("voice", "listening")
+        self.assertEqual(overlay.voice_state, "listening")
+
+        overlay._apply("computer", 3.0, now=100.0)
+        self.assertTrue(overlay.computer_active(now=102.9))
+        self.assertFalse(overlay.computer_active(now=103.1))
+
+    def test_border_deadline_only_extends(self):
+        from src.ui.overlay import StatusOverlay
+
+        overlay = StatusOverlay()
+        overlay._apply("computer", 5.0, now=100.0)
+        overlay._apply("computer", 1.0, now=100.5)  # короткий пинг не укорачивает
+
+        self.assertTrue(overlay.computer_active(now=104.9))
+
+    def test_blend_mixes_hex_colors(self):
+        from src.ui.overlay import blend
+
+        self.assertEqual(blend("#000000", "#ff0000", 0.0), "#000000")
+        self.assertEqual(blend("#000000", "#ff0000", 1.0), "#ff0000")
+        self.assertEqual(blend("#000000", "#ff0000", 0.5), "#800000")
 
 
 class VoiceUiTests(unittest.TestCase):
@@ -618,6 +684,7 @@ class VoiceUiTests(unittest.TestCase):
             recorder=FakeVoiceRecorder(np.zeros(SAMPLE_RATE, dtype=np.float32)),
             player=FakeVoicePlayer(),
             listener=FakeHotkeyListener(),
+            status_overlay=FakeStatusOverlay(),
         )
 
     def test_vision_preload_reports_model_status(self):
