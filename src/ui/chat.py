@@ -50,7 +50,7 @@ class ChatUI:
         self.pending_images: list[dict] = []
         self.sound_enabled = True
         self.voice = None  # VoiceController once /voice enables it
-        self.model_status: dict[str, tuple[str, float]] = {}  # name → (state, monotonic when set)
+        self.model_status: dict[str, tuple[str, float, str | None]] = {}  # name → (state, since, detail)
         self._type_ahead = ""  # keys typed during a turn, returned to the next prompt
         self.commands = CommandHandler(self)
 
@@ -74,19 +74,24 @@ class ChatUI:
 
     READY_LINGER_SECONDS = 5.0
 
-    def set_model_status(self, name: str, state: str) -> None:
+    def set_model_status(self, name: str, state: str, detail: str | None = None) -> None:
         """Report a model's loading state ("loading" / "ready" / "failed").
 
         Called from loader threads; rendered live at the right of the prompt.
+        `detail` carries short download progress ("↓ 1.2/6.4 GB 19%"); updates
+        within the same state keep the original stopwatch start.
         """
-        self.model_status[name] = (state, time.monotonic())
+        previous = self.model_status.get(name)
+        since = previous[1] if previous is not None and previous[0] == state else time.monotonic()
+        self.model_status[name] = (state, since, detail)
 
     def _model_status_text(self) -> str:
         parts = []
-        for name, (state, since) in list(self.model_status.items()):
+        for name, (state, since, detail) in list(self.model_status.items()):
             elapsed = time.monotonic() - since
             if state == "loading":
-                parts.append(f"⏳ {name} {elapsed:.0f}s")
+                progress = f" {detail}" if detail else ""
+                parts.append(f"⏳ {name}{progress} {elapsed:.0f}s")
             elif state == "failed":
                 parts.append(f"✗ {name}")
             elif state == "ready" and elapsed < self.READY_LINGER_SECONDS:

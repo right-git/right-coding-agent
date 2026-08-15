@@ -7,7 +7,7 @@ from PIL import Image
 from transformers import AutoModel, AutoProcessor, AutoTokenizer
 
 from src.config.logging import logger
-from src.utils.silence import silenced
+from src.utils.silence import silenced, suppress_native_stderr
 
 from .detection import parse_detections, resize_for_inference
 from .types import Detection
@@ -87,11 +87,36 @@ def quiet_transformers() -> None:
     hf_logging.disable_progress_bar()
 
 
+def resolve_runtime_source(source: str, predownload=None) -> str:
+    """A local snapshot path for the hub id, else `source` unchanged.
+
+    Downloading ourselves (sequentially, on the warm-up thread) feeds byte
+    progress to the prompt's status line and keeps /quit from hanging on
+    `snapshot_download`'s non-daemon worker threads; on failure transformers
+    downloads the model itself, unchanged.
+    """
+    if source != MODEL_ID:
+        return source
+    if predownload is None:
+        from src.utils.downloads import download_hf_model
+
+        predownload = download_hf_model
+    try:
+        return predownload(MODEL_ID, required_files=REQUIRED_MODEL_FILES)
+    except Exception as error:
+        logger.warning("Vision model pre-download failed ({}); transformers will download it", error)
+        return source
+
+
 def load_runtime() -> InferenceRuntime:
     device, dtype = select_inference_device()
-    tokenizer = AutoTokenizer.from_pretrained(MODEL, trust_remote_code=True)
-    processor = AutoProcessor.from_pretrained(MODEL, trust_remote_code=True)
-    model = AutoModel.from_pretrained(MODEL, dtype=dtype, trust_remote_code=True).to(device).eval()
+    source = resolve_runtime_source(MODEL)
+    # The remote code's dylibs (cv2) print objc duplicate-class noise straight
+    # to fd 2 on macOS; silenced() cannot catch that, only an fd-level mute.
+    with suppress_native_stderr():
+        tokenizer = AutoTokenizer.from_pretrained(source, trust_remote_code=True)
+        processor = AutoProcessor.from_pretrained(source, trust_remote_code=True)
+        model = AutoModel.from_pretrained(source, dtype=dtype, trust_remote_code=True).to(device).eval()
     return InferenceRuntime(tokenizer, processor, model, device, dtype)
 
 

@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import time
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -36,10 +37,12 @@ def preload_vision_model(ui: ChatUI | None = None) -> None:
     set_status = getattr(ui, "set_model_status", None) or (lambda *_: None)
     try:
         from src.llm.tools import warm_up_computer
+        from src.utils.downloads import reporting_progress
 
         logger.info("Preloading the vision locator model")
         set_status("vision", "loading")
-        warm_up_computer()
+        with reporting_progress(lambda detail: set_status("vision", "loading", detail)):
+            warm_up_computer()
         set_status("vision", "ready")
         logger.info("Vision locator model is ready")
     except Exception:
@@ -277,6 +280,9 @@ async def main():
         # Push-to-talk is always on: the hotkey works from the first prompt,
         # /voice only toggles whether replies are spoken.
         ui.start_voice_input()
+    except PermissionError as error:
+        logger.warning("Push-to-talk permission missing: {}", error)
+        ui.print_warning(str(error))
     except Exception:
         logger.exception("Push-to-talk startup failed")
         ui.print_warning("push-to-talk unavailable (see logs.log)")
@@ -298,7 +304,10 @@ async def main():
     # in-loop refresh below retries (rate-limited by the catalog's cooldown)
     # if this initial attempt failed.
     catalog_task = asyncio.create_task(load_catalog())
-    vision_task = asyncio.create_task(asyncio.to_thread(preload_vision_model, ui))
+    # A daemon thread, NOT asyncio.to_thread: the default executor's workers
+    # are non-daemon, and /quit during a first-run model download would hang
+    # the interpreter in concurrent.futures' atexit join.
+    threading.Thread(target=preload_vision_model, args=(ui,), name="vision-preload", daemon=True).start()
 
     try:
         while True:
@@ -330,7 +339,6 @@ async def main():
             )
     finally:
         catalog_task.cancel()
-        vision_task.cancel()
 
 
 if __name__ == "__main__":

@@ -1,11 +1,12 @@
 import io
+import os
 import sys
 import threading
 import unittest
 import warnings
 from contextlib import redirect_stderr, redirect_stdout
 
-from src.utils.silence import silenced
+from src.utils.silence import silenced, suppress_native_stderr
 
 
 class SilencedTests(unittest.TestCase):
@@ -59,6 +60,56 @@ class SilencedTests(unittest.TestCase):
             with silenced():
                 pass
             self.assertFalse(sys.stdout.isatty())
+
+
+class SuppressNativeStderrTests(unittest.TestCase):
+    """fd-level suppression for C libraries (objc runtime, dylib loaders)."""
+
+    def capture_fd2(self):
+        read_fd, write_fd = os.pipe()
+        saved = os.dup(2)
+        os.dup2(write_fd, 2)
+        os.close(write_fd)
+        return read_fd, saved
+
+    def restore_fd2(self, read_fd, saved):
+        os.dup2(saved, 2)
+        os.close(saved)
+        data = b""
+        os.set_blocking(read_fd, False)
+        try:
+            data = os.read(read_fd, 65536)
+        except BlockingIOError:
+            pass
+        os.close(read_fd)
+        return data
+
+    def test_fd_writes_inside_are_dropped_and_restored_after(self):
+        read_fd, saved = self.capture_fd2()
+        try:
+            with suppress_native_stderr():
+                os.write(2, b"native noise")
+            os.write(2, b"after")
+        finally:
+            data = self.restore_fd2(read_fd, saved)
+
+        self.assertNotIn(b"native noise", data)
+        self.assertIn(b"after", data)
+
+    def test_nested_use_restores_only_at_the_outermost_exit(self):
+        read_fd, saved = self.capture_fd2()
+        try:
+            with suppress_native_stderr():
+                with suppress_native_stderr():
+                    os.write(2, b"inner")
+                os.write(2, b"between")  # still one level deep — still muted
+            os.write(2, b"after")
+        finally:
+            data = self.restore_fd2(read_fd, saved)
+
+        self.assertNotIn(b"inner", data)
+        self.assertNotIn(b"between", data)
+        self.assertIn(b"after", data)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ route per thread: a thread inside `silenced()` writes to nowhere, every
 other thread writes through untouched.
 """
 
+import os
 import sys
 import threading
 import warnings
@@ -16,6 +17,10 @@ from contextlib import contextmanager
 
 _local = threading.local()
 _lock = threading.Lock()
+
+_fd_lock = threading.Lock()
+_fd_depth = 0
+_fd_saved: int | None = None
 
 
 class _ThreadRoutedStream:
@@ -64,3 +69,34 @@ def silenced():
             yield
     finally:
         _local.silenced = False
+
+
+@contextmanager
+def suppress_native_stderr():
+    """Drop C-level stderr while a native library loads (process-wide).
+
+    `silenced()` only intercepts Python's `sys.stderr`; the Objective-C
+    runtime's duplicate-class warnings (av and cv2 both bundle libavdevice)
+    are written straight to fd 2 and land on top of the prompt. This dups
+    /dev/null over fd 2 for the duration — process-global by nature, so keep
+    the window to the model-construction call itself, never around a long
+    download. Nesting/overlap from concurrent loader threads is refcounted;
+    the fd is restored at the outermost exit.
+    """
+    global _fd_depth, _fd_saved
+    with _fd_lock:
+        if _fd_depth == 0:
+            _fd_saved = os.dup(2)
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, 2)
+            os.close(devnull)
+        _fd_depth += 1
+    try:
+        yield
+    finally:
+        with _fd_lock:
+            _fd_depth -= 1
+            if _fd_depth == 0 and _fd_saved is not None:
+                os.dup2(_fd_saved, 2)
+                os.close(_fd_saved)
+                _fd_saved = None

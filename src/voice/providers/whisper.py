@@ -8,12 +8,27 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
+from src.utils.silence import silenced, suppress_native_stderr
+
 from ..utils import default_models_dir
 
 SAMPLE_RATE = 16_000
 MIN_STEP_SAMPLES = SAMPLE_RATE  # don't touch the model until a second of new audio accumulated
 CONTEXT_CHARS = 200
 DEFAULT_HOTWORDS = "git, bash, Python, uv, npm, run.sh, commit, push, merge, branch, deploy, docker, API, README"
+REQUIRED_MODEL_FILES = ("model.bin", "config.json")
+
+
+def resolve_repo(model_name: str) -> str:
+    """Hub repo id for a faster-whisper alias; full `org/name` ids pass through."""
+    if "/" in model_name:
+        return model_name
+    try:
+        from faster_whisper.utils import _MODELS
+
+        return _MODELS.get(model_name, model_name)
+    except Exception:
+        return model_name
 
 
 def _add_torch_cuda_dlls() -> None:
@@ -46,6 +61,7 @@ class WhisperTranscriber:
         beam_size: int = 5,
         models_dir: Path | None = None,
         loader=None,
+        predownload=None,
     ):
         self.model_name = model_name
         self.language = language
@@ -53,6 +69,7 @@ class WhisperTranscriber:
         self.beam_size = beam_size
         self.models_dir = models_dir or default_models_dir() / "faster-whisper"
         self._loader = loader
+        self._predownload = predownload
         self._model = None
 
     def load(self):
@@ -63,19 +80,50 @@ class WhisperTranscriber:
     def open_session(self) -> "WhisperSession":
         return WhisperSession(self)
 
-    def _default_loader(self):
-        from faster_whisper import WhisperModel
+    def _model_source(self) -> str:
+        """A local snapshot path when possible, else the model name.
 
-        _add_torch_cuda_dlls()
+        Downloading ourselves (sequentially, on this thread) keeps the exit
+        clean and feeds byte progress to the prompt's status line; on any
+        failure faster-whisper's own downloader takes over unchanged.
+        """
+        predownload = self._predownload
+        if predownload is None:
+            from src.utils.downloads import download_hf_model
+
+            predownload = download_hf_model
+        try:
+            return predownload(
+                resolve_repo(self.model_name), cache_dir=self.models_dir, required_files=REQUIRED_MODEL_FILES
+            )
+        except Exception as error:
+            logger.warning("Whisper pre-download failed ({}); faster-whisper will download the model itself", error)
+            return self.model_name
+
+    def _default_loader(self):
+        # The load runs on a warm-up thread while the prompt is live:
+        # silenced() drops Python-side chatter (hf progress bars, warnings),
+        # suppress_native_stderr() the objc duplicate-class noise from the av
+        # dylib load — see silence.py for why both are needed.
+        with silenced():
+            with suppress_native_stderr():
+                from faster_whisper import WhisperModel
+
+            _add_torch_cuda_dlls()
+            source = self._model_source()
+            return self._load_on_best_device(WhisperModel, source)
+
+    def _load_on_best_device(self, whisper_model_cls, source: str):
         for device, compute_type in (("cuda", "float16"), ("cpu", "int8")):
             started = time.perf_counter()
             try:
-                model = WhisperModel(
-                    self.model_name, device=device, compute_type=compute_type, download_root=str(self.models_dir)
-                )
-                # Warm-up: the first call compiles kernels; without it the first real
-                # utterance pays seconds of extra latency.
-                list(model.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), language="ru", beam_size=1)[0])
+                with suppress_native_stderr():
+                    model = whisper_model_cls(
+                        source, device=device, compute_type=compute_type, download_root=str(self.models_dir)
+                    )
+                    # Warm-up: the first call compiles kernels; without it the first real
+                    # utterance pays seconds of extra latency.
+                    list(model.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), language="ru", beam_size=1)[0])
             except Exception as error:
                 logger.warning("Whisper on {}/{} failed: {}", device, compute_type, error)
                 continue

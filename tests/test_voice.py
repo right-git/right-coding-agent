@@ -144,6 +144,40 @@ class HotkeyTests(unittest.TestCase):
         self.assertEqual(len(toggles), 1)
         listener.stop()
 
+    def test_denied_input_access_raises_instead_of_starting_pynput(self):
+        # Starting an untrusted event tap on macOS prints "This process is not
+        # trusted!" straight over the prompt — preflight and explain instead.
+        factory_calls = []
+
+        listener = HotkeyListener(
+            "f8",
+            listener_factory=lambda on_press: factory_calls.append(on_press),
+            access_checker=lambda: False,
+        )
+
+        with self.assertRaises(PermissionError) as raised:
+            listener.start()
+
+        self.assertIn("Accessibility", str(raised.exception))
+        self.assertEqual(factory_calls, [])
+
+    def test_granted_input_access_starts_the_listener(self):
+        class FakeListener:
+            def __init__(self, on_press):
+                self.on_press = on_press
+
+            def start(self):
+                pass
+
+            def stop(self):
+                pass
+
+        listener = HotkeyListener("f8", listener_factory=FakeListener, access_checker=lambda: True)
+        listener.start()
+
+        self.assertIsInstance(listener._listener, FakeListener)
+        listener.stop()
+
 
 class ProviderFactoryTests(unittest.TestCase):
     def test_local_providers(self):
@@ -239,6 +273,47 @@ class WhisperSessionTests(unittest.TestCase):
         self.assertEqual(kwargs["beam_size"], 3)
 
 
+class WhisperModelSourceTests(unittest.TestCase):
+    def test_known_alias_maps_to_its_hub_repo(self):
+        from src.voice.providers.whisper import resolve_repo
+
+        self.assertIn("/", resolve_repo("large-v3-turbo"))
+        self.assertNotEqual(resolve_repo("large-v3-turbo"), "large-v3-turbo")
+
+    def test_full_repo_id_passes_through(self):
+        from src.voice.providers.whisper import resolve_repo
+
+        self.assertEqual(resolve_repo("org/custom-model"), "org/custom-model")
+
+    def test_model_source_prefers_the_predownloaded_snapshot(self):
+        from src.voice.providers.whisper import WhisperTranscriber
+
+        calls = []
+
+        def predownload(repo_id, cache_dir=None, required_files=()):
+            calls.append((repo_id, str(cache_dir)))
+            return "/snapshots/whisper"
+
+        transcriber = WhisperTranscriber(
+            model_name="large-v3-turbo", models_dir=Path("/models/fw"), predownload=predownload
+        )
+
+        self.assertEqual(transcriber._model_source(), "/snapshots/whisper")
+        self.assertEqual(len(calls), 1)
+        self.assertIn("/", calls[0][0])
+        self.assertEqual(calls[0][1], "/models/fw")
+
+    def test_model_source_falls_back_to_the_name_when_predownload_fails(self):
+        from src.voice.providers.whisper import WhisperTranscriber
+
+        def predownload(repo_id, cache_dir=None, required_files=()):
+            raise OSError("offline")
+
+        transcriber = WhisperTranscriber(model_name="large-v3-turbo", predownload=predownload)
+
+        self.assertEqual(transcriber._model_source(), "large-v3-turbo")
+
+
 class FakeWave:
     def cpu(self):
         return self
@@ -280,6 +355,38 @@ class SileroSpeakerTests(unittest.TestCase):
         speaker.synthesize("Два.")
 
         self.assertEqual(len(loads), 1)
+
+    def test_download_reports_progress_and_writes_the_file(self):
+        from contextlib import contextmanager
+        from tempfile import TemporaryDirectory
+
+        from src.utils.downloads import reporting_progress
+
+        chunks = [b"x" * 19_000_000, b"x" * 19_000_000]
+
+        class FakeResponse:
+            headers = {"content-length": str(sum(len(c) for c in chunks))}
+
+            def raise_for_status(self):
+                pass
+
+            def iter_bytes(self, _size):
+                yield from chunks
+
+        @contextmanager
+        def fake_stream(method, url, **kwargs):
+            yield FakeResponse()
+
+        with TemporaryDirectory() as tmp:
+            target = Path(tmp) / "v4_ru.pt"
+            speaker = SileroSpeaker(models_dir=Path(tmp), stream_factory=fake_stream)
+            seen = []
+            with reporting_progress(seen.append):
+                speaker._download(target)
+
+            self.assertEqual(target.stat().st_size, 38_000_000)
+            self.assertIn("↓ 19/38 MB 50%", seen)
+            self.assertEqual(seen[-1], "↓ 38/38 MB 100%")
 
 
 class FakeInputStream:
@@ -642,10 +749,10 @@ class VoiceUiTests(unittest.TestCase):
 
         ui = ChatUI(model="m")
         now = time_module.monotonic()
-        ui.model_status["vision"] = ("loading", now - 3)
-        ui.model_status["voice asr"] = ("ready", now)
-        ui.model_status["voice tts"] = ("ready", now - 60)  # давно готова — не показываем
-        ui.model_status["broken"] = ("failed", now - 60)  # провал висит, пока его видно
+        ui.model_status["vision"] = ("loading", now - 3, None)
+        ui.model_status["voice asr"] = ("ready", now, None)
+        ui.model_status["voice tts"] = ("ready", now - 60, None)  # давно готова — не показываем
+        ui.model_status["broken"] = ("failed", now - 60, None)  # провал висит, пока его видно
 
         text = ui._model_status_text()
 
@@ -653,6 +760,31 @@ class VoiceUiTests(unittest.TestCase):
         self.assertIn("✓ voice asr", text)
         self.assertNotIn("voice tts", text)
         self.assertIn("✗ broken", text)
+
+    def test_model_status_shows_download_detail_while_loading(self):
+        from src.ui.chat import ChatUI
+
+        ui = ChatUI(model="m")
+        ui.set_model_status("voice asr", "loading", "↓ 1.2/6.4 GB 19%")
+
+        self.assertIn("⏳ voice asr ↓ 1.2/6.4 GB 19%", ui._model_status_text())
+
+    def test_progress_updates_do_not_reset_the_loading_stopwatch(self):
+        from src.ui.chat import ChatUI
+
+        ui = ChatUI(model="m")
+        ui.set_model_status("vision", "loading")
+        started = ui.model_status["vision"][1]
+        ui.model_status["vision"] = ("loading", started - 5, None)  # age the entry
+
+        ui.set_model_status("vision", "loading", "↓ 1 GB")
+
+        self.assertEqual(ui.model_status["vision"][1], started - 5)
+        self.assertNotEqual(
+            ui.set_model_status("vision", "ready") or ui.model_status["vision"][1],
+            started - 5,
+            "a state change must restart the clock",
+        )
 
     def test_rprompt_combines_voice_and_model_status(self):
         from src.ui.chat import ChatUI
@@ -673,6 +805,44 @@ class VoiceUiTests(unittest.TestCase):
         controller._warm_up_asr()
 
         self.assertEqual(statuses, [("voice asr", "loading"), ("voice asr", "ready")])
+
+    def test_warm_up_asr_forwards_download_progress(self):
+        from src.utils.downloads import report_progress
+        from src.ui.voice import VoiceController
+
+        statuses = []
+        controller = VoiceController(
+            SimpleNamespace(set_model_status=lambda *args: statuses.append(args)),
+            transcriber=SimpleNamespace(load=lambda: report_progress("↓ 5/38 MB 13%")),
+            speaker=FakeVoiceSpeaker(),
+            recorder=FakeVoiceRecorder(np.zeros(SAMPLE_RATE, dtype=np.float32)),
+            player=FakeVoicePlayer(),
+            listener=FakeHotkeyListener(),
+            status_overlay=FakeStatusOverlay(),
+        )
+
+        controller._warm_up_asr()
+
+        self.assertIn(("voice asr", "loading", "↓ 5/38 MB 13%"), statuses)
+
+    def test_warm_up_tts_forwards_download_progress(self):
+        from src.utils.downloads import report_progress
+        from src.ui.voice import VoiceController
+
+        statuses = []
+        controller = VoiceController(
+            SimpleNamespace(set_model_status=lambda *args: statuses.append(args)),
+            transcriber=SimpleNamespace(load=lambda: None),
+            speaker=SimpleNamespace(load=lambda: report_progress("↓ 38 MB")),
+            recorder=FakeVoiceRecorder(np.zeros(SAMPLE_RATE, dtype=np.float32)),
+            player=FakeVoicePlayer(),
+            listener=FakeHotkeyListener(),
+            status_overlay=FakeStatusOverlay(),
+        )
+
+        controller._warm_up_tts()
+
+        self.assertIn(("voice tts", "loading", "↓ 38 MB"), statuses)
 
     def make_controller_with_ui(self, ui):
         from src.ui.voice import VoiceController
@@ -698,6 +868,18 @@ class VoiceUiTests(unittest.TestCase):
 
         ui.set_model_status.assert_any_call("vision", "loading")
         ui.set_model_status.assert_called_with("vision", "ready")
+
+    def test_vision_preload_forwards_download_progress(self):
+        from unittest.mock import Mock
+
+        from src.main import preload_vision_model
+        from src.utils.downloads import report_progress
+
+        ui = Mock()
+        with patch("src.llm.tools.warm_up_computer", side_effect=lambda: report_progress("↓ 2/7 GB 29%")):
+            preload_vision_model(ui)
+
+        ui.set_model_status.assert_any_call("vision", "loading", "↓ 2/7 GB 29%")
 
     def test_voice_command_toggles_spoken_replies(self):
         from src.ui.chat import ChatUI

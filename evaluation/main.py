@@ -7,6 +7,7 @@ session lines of the two footers.
 """
 
 import asyncio
+import threading
 
 from src.config.logging import logger
 from src.config.settings import settings
@@ -65,7 +66,9 @@ async def main():
         ui.set_model_catalog(await catalog.models())
 
     catalog_task = asyncio.create_task(load_catalog())
-    vision_task = asyncio.create_task(asyncio.to_thread(preload_vision_model))
+    # Daemon thread for the same reason as src.main: /quit must not wait for
+    # a first-run model download in a non-daemon executor worker.
+    threading.Thread(target=preload_vision_model, args=(ui,), name="vision-preload", daemon=True).start()
     logger.info("Started the DIRECT-architecture evaluation REPL")
 
     try:
@@ -98,7 +101,6 @@ async def main():
             )
     finally:
         catalog_task.cancel()
-        vision_task.cancel()
 
 
 if __name__ == "__main__":

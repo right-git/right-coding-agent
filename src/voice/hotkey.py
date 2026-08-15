@@ -93,6 +93,38 @@ class KeyStatePoller:
             self._thread = None
 
 
+ACCESS_HINT = (
+    "push-to-talk needs the macOS Accessibility permission: System Settings → "
+    "Privacy & Security → Accessibility → enable your terminal app, then restart"
+)
+
+
+def macos_input_access() -> bool:
+    """True when this process may watch global input; asks macOS to grant it once.
+
+    Starting an untrusted event tap makes the OS print "This process is not
+    trusted!" straight to stderr (over the live prompt) and the listener
+    silently receives nothing — so preflight, trigger the system permission
+    dialog, and let the caller explain instead. When the check itself is
+    unavailable, report access so pynput still gets its chance.
+    """
+    if sys.platform != "darwin":
+        return True
+    try:
+        import ApplicationServices
+
+        if ApplicationServices.AXIsProcessTrusted():
+            return True
+        try:
+            options = {ApplicationServices.kAXTrustedCheckOptionPrompt: True}
+            ApplicationServices.AXIsProcessTrustedWithOptions(options)
+        except Exception:
+            logger.debug("Could not raise the macOS accessibility prompt")
+        return False
+    except Exception:
+        return True
+
+
 def parse_hotkey(spec: str) -> set:
     """A pynput key name (alt_r, f8, pause...) or single character → set of key objects to match.
 
@@ -122,10 +154,17 @@ class HotkeyListener:
     raised — a broken callback must not kill the watcher.
     """
 
-    def __init__(self, key_spec: str = "alt_r", on_toggle: Callable[[], None] = lambda: None, listener_factory=None):
+    def __init__(
+        self,
+        key_spec: str = "alt_r",
+        on_toggle: Callable[[], None] = lambda: None,
+        listener_factory=None,
+        access_checker=None,
+    ):
         self.key_spec = key_spec
         self.on_toggle = on_toggle
         self._listener_factory = listener_factory
+        self._access_checker = access_checker
         self._listener = None
 
     def _fire(self) -> None:
@@ -150,6 +189,15 @@ class HotkeyListener:
                 self._listener.start()
                 logger.info("Push-to-talk backend: GetAsyncKeyState poller ({})", self.key_spec)
                 return
+
+        # The explicit checker is always honoured; the platform default only
+        # guards the real pynput path (test factories need no OS permission).
+        if self._access_checker is not None:
+            allowed = self._access_checker()
+        else:
+            allowed = self._listener_factory is not None or macos_input_access()
+        if not allowed:
+            raise PermissionError(ACCESS_HINT)
 
         keys = parse_hotkey(self.key_spec)
         logger.info("Push-to-talk backend: pynput listener ({})", self.key_spec)

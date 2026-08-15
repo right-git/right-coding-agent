@@ -32,6 +32,33 @@ class ModelSourceTests(unittest.TestCase):
 
         self.assertEqual(source, locator_module.MODEL_ID)
 
+    def test_hub_id_is_predownloaded_to_a_local_snapshot(self):
+        calls = []
+
+        def predownload(repo_id, required_files=()):
+            calls.append((repo_id, required_files))
+            return "/snapshots/vision"
+
+        source = locator_module.resolve_runtime_source(locator_module.MODEL_ID, predownload)
+
+        self.assertEqual(source, "/snapshots/vision")
+        self.assertEqual(calls, [(locator_module.MODEL_ID, locator_module.REQUIRED_MODEL_FILES)])
+
+    def test_local_source_skips_the_predownload(self):
+        source = locator_module.resolve_runtime_source(
+            "/already/local", lambda *args, **kwargs: self.fail("must not download")
+        )
+
+        self.assertEqual(source, "/already/local")
+
+    def test_failed_predownload_falls_back_to_the_hub_id(self):
+        def predownload(repo_id, required_files=()):
+            raise OSError("offline")
+
+        source = locator_module.resolve_runtime_source(locator_module.MODEL_ID, predownload)
+
+        self.assertEqual(source, locator_module.MODEL_ID)
+
 
 class InferenceRequestTests(unittest.TestCase):
     def test_gui_description_is_wrapped_in_the_model_prompt(self):
@@ -88,6 +115,7 @@ class InferenceDeviceTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.TestCase):
+    @patch.object(locator_module, "resolve_runtime_source", side_effect=lambda source: source)
     @patch.object(locator_module, "select_inference_device")
     @patch.object(locator_module.AutoModel, "from_pretrained")
     @patch.object(locator_module.AutoProcessor, "from_pretrained")
@@ -98,6 +126,7 @@ class RuntimeTests(unittest.TestCase):
         processor_loader,
         model_loader,
         select_device,
+        _resolve_source,
     ):
         tokenizer = tokenizer_loader.return_value
         processor = processor_loader.return_value

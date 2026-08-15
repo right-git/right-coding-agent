@@ -20,6 +20,7 @@ import time
 
 from loguru import logger
 
+from src.utils.downloads import reporting_progress
 from src.voice import AudioPlayer, HotkeyListener, MicrophoneRecorder, SentenceBuffer, SpeakableFilter
 
 STEP_INTERVAL = 2.0
@@ -155,7 +156,8 @@ class VoiceController:
         set_status = getattr(self.ui, "set_model_status", None) or (lambda *_: None)
         try:
             set_status("voice asr", "loading")
-            self._transcriber.load()
+            with reporting_progress(lambda detail: set_status("voice asr", "loading", detail)):
+                self._transcriber.load()
             set_status("voice asr", "ready")
             logger.info("Push-to-talk ASR model is warm")
         except Exception:
@@ -166,7 +168,8 @@ class VoiceController:
         set_status = getattr(self.ui, "set_model_status", None) or (lambda *_: None)
         try:
             set_status("voice tts", "loading")
-            self._speaker.load()
+            with reporting_progress(lambda detail: set_status("voice tts", "loading", detail)):
+                self._speaker.load()
             set_status("voice tts", "ready")
             logger.info("TTS model is warm")
         except Exception:
