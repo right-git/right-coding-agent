@@ -67,6 +67,36 @@ class HotkeyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_hotkey("no_such_key")
 
+    def test_vk_resolution_for_named_keys(self):
+        from src.voice.hotkey import resolve_vk
+
+        self.assertEqual(resolve_vk("alt_r"), {0xA5})
+        self.assertEqual(resolve_vk("f8"), {0x77})
+        self.assertIsNone(resolve_vk("no_such_key"))
+
+    def test_poller_fires_only_on_down_edges(self):
+        from src.voice.hotkey import KeyStatePoller
+
+        states = iter([False, True, True, False, True])
+        fired = []
+        poller = KeyStatePoller({0xA5}, lambda: fired.append(1), state_reader=lambda: next(states))
+
+        for _ in range(5):
+            poller._step()
+
+        self.assertEqual(len(fired), 2)  # два нажатия, удержание не дублирует
+
+    @unittest.skipUnless(sys.platform == "win32", "GetAsyncKeyState — только Windows")
+    def test_windows_listener_uses_the_poller_not_a_hook(self):
+        from src.voice.hotkey import KeyStatePoller
+
+        listener = HotkeyListener("alt_r", on_toggle=lambda: None)
+        listener.start()
+        try:
+            self.assertIsInstance(listener._listener, KeyStatePoller)
+        finally:
+            listener.stop()
+
     def test_listener_fires_only_on_configured_key(self):
         from pynput import keyboard
 
