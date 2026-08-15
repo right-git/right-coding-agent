@@ -4,6 +4,7 @@ import time
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from src.config.logging import logger
 from src.config.settings import settings
+from src.llm.history import compact_finished_turn
 from src.llm.providers import OpenRouterCatalog
 from src.llm.types import LLMProvider
 from src.llm.statistics import SessionUsage, turn_usage_from_messages
@@ -188,7 +189,7 @@ async def process_user_turn(
                 previous_ids=previous_ids,
                 duration=time.perf_counter() - started,
             )
-            return trimmed_messages
+            return compact_finished_turn(trimmed_messages)
 
         if printed_ids:
             ui.print_response(new_messages, skip_ids=printed_ids)
@@ -203,7 +204,7 @@ async def process_user_turn(
             previous_ids=previous_ids,
             duration=time.perf_counter() - started,
         )
-        return trimmed_messages
+        return compact_finished_turn(trimmed_messages)
     except Exception as e:
         logger.exception(
             "User turn failed model [{}] message_chars [{}]",
