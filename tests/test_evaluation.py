@@ -11,17 +11,16 @@ from evaluation.direct_tools import (
     DIRECT_TOOLS,
     schema_token_estimate,
 )
-from src.llm.computer_tools import screen_click, set_computer
-from src.llm.log_middleware import MessageLogMiddleware
-from src.llm.meta_tools import META_TOOLS
+from src.llm.tools.computer import screen_click, set_computer
+from src.llm.middlewares.message_log import MessageLogMiddleware
+from src.llm.tools import META_TOOLS
 from src.llm.types import LLMProvider
-from src.tools.computer_use import ComputerUse, NullOverlay
-from src.tools.computer_use.fakes import (
+from src.llm.tools.computer import ComputerUse, NullOverlay
+from src.llm.tools.computer.fakes import (
     RecordingPointer,
     ScriptedLocator,
     StaticScreen,
 )
-
 
 EXPECTED_DIRECT_NAMES = [
     "web_search",
@@ -37,9 +36,7 @@ EXPECTED_DIRECT_NAMES = [
 
 class DirectToolsTests(unittest.TestCase):
     def test_direct_tools_cover_the_whole_registry(self):
-        self.assertEqual(
-            [tool_obj.name for tool_obj in DIRECT_TOOLS], EXPECTED_DIRECT_NAMES
-        )
+        self.assertEqual([tool_obj.name for tool_obj in DIRECT_TOOLS], EXPECTED_DIRECT_NAMES)
 
     def test_wrappers_keep_the_original_schema_and_description(self):
         wrapped = next(t for t in DIRECT_TOOLS if t.name == "screen_click")

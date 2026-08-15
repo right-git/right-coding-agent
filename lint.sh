@@ -1,0 +1,1 @@
+uv run black src/ evaluation/ tests/ && uv run flake8 src/ evaluation/ tests/ --max-line-length=120 --exclude=__init__.py,src/config/prompts.py --extend-ignore=E203,W503,E226,E704 --per-file-ignores="tests/*.py:E402"

@@ -1,7 +1,6 @@
 import unittest
 
-from src.llm.openrouter import ModelInfo, OpenRouterCatalog, parse_models
-
+from src.llm.providers.openrouter import ModelInfo, OpenRouterCatalog, parse_models
 
 PAYLOAD = {
     "data": [
@@ -118,9 +117,7 @@ class OpenRouterCatalogTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failures_are_not_retried_within_the_cooldown(self):
         clock = FakeClock()
-        catalog, calls = self.make_catalog(
-            [RuntimeError("offline"), PAYLOAD], clock
-        )
+        catalog, calls = self.make_catalog([RuntimeError("offline"), PAYLOAD], clock)
 
         self.assertEqual(await catalog.models(), {})
         clock.advance(10)
@@ -134,9 +131,7 @@ class OpenRouterCatalogTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_stale_cache_survives_a_failed_refresh(self):
         clock = FakeClock()
-        catalog, calls = self.make_catalog(
-            [PAYLOAD, RuntimeError("offline")], clock
-        )
+        catalog, calls = self.make_catalog([PAYLOAD, RuntimeError("offline")], clock)
 
         first = await catalog.models()
         clock.advance(3601)

@@ -9,22 +9,21 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from PIL import Image
 
-from src.llm.attachments import (
+from src.llm.middlewares.attachments import (
     ATTACHMENT_MARKER,
     AttachedImagesMiddleware,
-    attach_image,
-    collecting_images,
     image_blocks,
 )
-from src.llm.computer_tools import screen_locate, screen_screenshot, set_computer
-from src.llm.meta_tools import ToolRegistry, run_tools, set_registry
-from src.tools.computer_use import (
+from src.llm.tools.meta.attachments import attach_image, collecting_images
+from src.llm.tools.computer import screen_locate, screen_screenshot, set_computer
+from src.llm.tools import ToolRegistry, run_tools, set_registry
+from src.llm.tools.computer import (
     ComputerUse,
     Detection,
     NullOverlay,
     image_to_base64,
 )
-from src.tools.computer_use.fakes import (
+from src.llm.tools.computer.fakes import (
     RecordingPointer,
     ScriptedLocator,
     StaticScreen,
@@ -96,9 +95,7 @@ class ComputerUseImageTests(unittest.TestCase):
             computer.annotated_base64()
 
     def test_annotated_base64_draws_the_last_detections(self):
-        computer = self.make_computer(
-            responses=[[Detection("save", (10, 20, 60, 60))]]
-        )
+        computer = self.make_computer(responses=[[Detection("save", (10, 20, 60, 60))]])
         computer.locate_object("the save button")
 
         decoded = decode(computer.annotated_base64())
@@ -156,9 +153,7 @@ class ScreenToolAttachTests(unittest.IsolatedAsyncioTestCase):
         self.install(responses=[[Detection("save", (10, 20, 60, 60))]])
 
         with collecting_images() as bucket:
-            result = await screen_locate.ainvoke(
-                {"description": "save button", "return_screen": True}
-            )
+            result = await screen_locate.ainvoke({"description": "save button", "return_screen": True})
 
         self.assertIn("save: box=", result)
         self.assertIn("annotated screenshot attached", result)
@@ -248,26 +243,16 @@ class MiddlewareTests(unittest.TestCase):
 
     def test_images_are_surfaced_as_a_vision_message(self):
         middleware = AttachedImagesMiddleware()
-        messages = self.tool_round(
-            [{"base64_data": "QUJD", "mime_type": "image/png", "label": "shot"}]
-        )
+        messages = self.tool_round([{"base64_data": "QUJD", "mime_type": "image/png", "label": "shot"}])
 
         update = middleware.before_model({"messages": messages})
 
         (injected,) = update["messages"]
         self.assertIsInstance(injected, HumanMessage)
         self.assertTrue(injected.additional_kwargs[ATTACHMENT_MARKER])
-        image_urls = [
-            block["image_url"]["url"]
-            for block in injected.content
-            if block["type"] == "image_url"
-        ]
+        image_urls = [block["image_url"]["url"] for block in injected.content if block["type"] == "image_url"]
         self.assertEqual(image_urls, ["data:image/png;base64,QUJD"])
-        texts = [
-            block["text"]
-            for block in injected.content
-            if block["type"] == "text"
-        ]
+        texts = [block["text"] for block in injected.content if block["type"] == "text"]
         self.assertIn("shot", texts)
 
     def test_surfacing_is_idempotent(self):
@@ -280,20 +265,14 @@ class MiddlewareTests(unittest.TestCase):
     def test_rounds_without_images_are_ignored(self):
         middleware = AttachedImagesMiddleware()
 
-        self.assertIsNone(
-            middleware.before_model({"messages": self.tool_round(None)})
-        )
-        self.assertIsNone(
-            middleware.before_model({"messages": [HumanMessage("hi")]})
-        )
+        self.assertIsNone(middleware.before_model({"messages": self.tool_round(None)}))
+        self.assertIsNone(middleware.before_model({"messages": [HumanMessage("hi")]}))
 
     def test_image_blocks_include_labels(self):
         blocks = image_blocks([{"base64_data": "QUJD", "label": "screen 1"}])
 
         self.assertEqual(blocks[1], {"type": "text", "text": "screen 1"})
-        self.assertEqual(
-            blocks[2]["image_url"]["url"], "data:image/jpeg;base64,QUJD"
-        )
+        self.assertEqual(blocks[2]["image_url"]["url"], "data:image/jpeg;base64,QUJD")
 
 
 if __name__ == "__main__":

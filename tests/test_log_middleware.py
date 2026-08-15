@@ -3,7 +3,7 @@ import unittest
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from src.llm.log_middleware import (
+from src.llm.middlewares.message_log import (
     MessageLogMiddleware,
     scrub,
     scrub_text,
@@ -51,9 +51,7 @@ class ScrubTests(unittest.TestCase):
 
 class SerializeMessageTests(unittest.TestCase):
     def test_tool_message_keeps_call_id_name_and_status(self):
-        entry = serialize_message(
-            ToolMessage(content="ok", tool_call_id="c1", name="run_tools")
-        )
+        entry = serialize_message(ToolMessage(content="ok", tool_call_id="c1", name="run_tools"))
 
         self.assertEqual(entry["type"], "tool")
         self.assertEqual(entry["tool_call_id"], "c1")
@@ -114,9 +112,7 @@ class MessageLogMiddlewareTests(unittest.TestCase):
                     {"type": "text", "text": "Images captured:"},
                     {
                         "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{base64_payload}"
-                        },
+                        "image_url": {"url": f"data:image/jpeg;base64,{base64_payload}"},
                     },
                 ]
             ),
@@ -133,9 +129,7 @@ class MessageLogMiddlewareTests(unittest.TestCase):
         human, ai, tool, vision = payload["messages"]
         self.assertEqual(human, {"type": "human", "id": "h1", "content": "hello"})
         self.assertIn("… [+", ai["tool_calls"][0]["args"]["code"])
-        self.assertEqual(
-            tool["content"], "base64 JPEG: <base64 stripped, 5000 chars>"
-        )
+        self.assertEqual(tool["content"], "base64 JPEG: <base64 stripped, 5000 chars>")
         self.assertEqual(
             vision["content"][1]["image_url"]["url"],
             f"<data-uri stripped, {23 + 5000} chars>",
@@ -154,16 +148,12 @@ class MessageLogMiddlewareTests(unittest.TestCase):
             },
         )
 
-        result = middleware.after_model(
-            {"messages": [HumanMessage("hi"), response]}
-        )
+        result = middleware.after_model({"messages": [HumanMessage("hi"), response]})
 
         self.assertIsNone(result)
         payload = json.loads(lines[0])
         self.assertEqual(payload["event"], "model_response")
-        self.assertEqual(
-            payload["message"]["response_metadata"]["finish_reason"], "stop"
-        )
+        self.assertEqual(payload["message"]["response_metadata"]["finish_reason"], "stop")
         self.assertEqual(
             payload["message"]["usage"],
             {"input_tokens": 0, "output_tokens": 0},
@@ -184,9 +174,7 @@ class MessageLogMiddlewareTests(unittest.TestCase):
 
         middleware = MessageLogMiddleware(emit=explode)
 
-        self.assertIsNone(
-            middleware.before_model({"messages": [HumanMessage("hi")]})
-        )
+        self.assertIsNone(middleware.before_model({"messages": [HumanMessage("hi")]}))
 
 
 if __name__ == "__main__":

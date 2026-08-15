@@ -6,9 +6,8 @@ from unittest.mock import Mock
 
 from PIL import Image
 
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src.tools.computer_use import (
+from src.llm.tools.computer import (
     ComputerUse,
     Detection,
     NullOverlay,
@@ -26,20 +25,22 @@ class PositionLabelTests(unittest.TestCase):
         self.assertEqual(position_label((290, 10), size), "top-right")
         self.assertEqual(position_label((10, 290), size), "bottom-left")
         self.assertEqual(position_label((150, 290), size), "bottom-center")
-from src.tools.computer_use.clipboard import MemoryClipboard
-from src.tools.computer_use.fakes import (
+
+
+from src.llm.tools.computer.clipboard import MemoryClipboard
+from src.llm.tools.computer.fakes import (
     RecordingPointer,
     ScriptedLocator,
     StaticScreen,
 )
-from src.tools.computer_use.overlay import (
+from src.llm.tools.computer.overlay import (
     OverlayStyle,
     connector_corner,
     enable_click_through,
     tooltip_placement,
     wrap_note,
 )
-from src.tools.computer_use.pointer import (
+from src.llm.tools.computer.pointer import (
     KeyEvent,
     MOUSEEVENTF_HWHEEL,
     MOUSEEVENTF_LEFTDOWN,
@@ -57,7 +58,6 @@ from src.tools.computer_use.pointer import (
     scroll_command,
     text_actions,
 )
-
 
 VK_CONTROL = 0x11
 VK_SHIFT = 0x10
@@ -174,10 +174,9 @@ class TextActionTests(unittest.TestCase):
 
         self.assertEqual([action.kind for action in actions], ["unicode", "unicode"])
         self.assertEqual(
-            "".join(
-                action.code.to_bytes(2, "little").decode("utf-16-le", "surrogatepass")
-                for action in actions
-            ).encode("utf-16", "surrogatepass").decode("utf-16", "surrogatepass"),
+            "".join(action.code.to_bytes(2, "little").decode("utf-16-le", "surrogatepass") for action in actions)
+            .encode("utf-16", "surrogatepass")
+            .decode("utf-16", "surrogatepass"),
             "😀",
         )
 
@@ -185,15 +184,9 @@ class TextActionTests(unittest.TestCase):
 class ScrollCommandTests(unittest.TestCase):
     def test_vertical_and_horizontal_directions_use_matching_wheels(self):
         self.assertEqual(scroll_command("up", 2), (MOUSEEVENTF_WHEEL, 2 * WHEEL_DELTA))
-        self.assertEqual(
-            scroll_command("down", 2), (MOUSEEVENTF_WHEEL, -2 * WHEEL_DELTA)
-        )
-        self.assertEqual(
-            scroll_command("right", 1), (MOUSEEVENTF_HWHEEL, WHEEL_DELTA)
-        )
-        self.assertEqual(
-            scroll_command("left", 1), (MOUSEEVENTF_HWHEEL, -WHEEL_DELTA)
-        )
+        self.assertEqual(scroll_command("down", 2), (MOUSEEVENTF_WHEEL, -2 * WHEEL_DELTA))
+        self.assertEqual(scroll_command("right", 1), (MOUSEEVENTF_HWHEEL, WHEEL_DELTA))
+        self.assertEqual(scroll_command("left", 1), (MOUSEEVENTF_HWHEEL, -WHEEL_DELTA))
 
     def test_invalid_direction_and_amount_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "Unsupported scroll direction"):
@@ -204,9 +197,7 @@ class ScrollCommandTests(unittest.TestCase):
 
 class InterpolateTests(unittest.TestCase):
     def test_intermediate_points_end_at_the_target(self):
-        self.assertEqual(
-            interpolate((0, 0), (10, 20), 2), [(5, 10), (10, 20)]
-        )
+        self.assertEqual(interpolate((0, 0), (10, 20), 2), [(5, 10), (10, 20)])
 
     def test_steps_must_be_positive(self):
         with self.assertRaisesRegex(ValueError, "steps must be positive"):
@@ -290,9 +281,7 @@ class PointerTests(unittest.TestCase):
     def test_scroll_sends_the_signed_wheel_delta(self):
         self.pointer.scroll("down", 3)
 
-        self.assertEqual(
-            self.dispatcher.events, [("mouse", MOUSEEVENTF_WHEEL, -3 * WHEEL_DELTA)]
-        )
+        self.assertEqual(self.dispatcher.events, [("mouse", MOUSEEVENTF_WHEEL, -3 * WHEEL_DELTA)])
 
     def test_type_text_presses_and_releases_each_code_unit(self):
         self.pointer.type_text("a\n")
@@ -321,9 +310,7 @@ class PointerTests(unittest.TestCase):
             self.pointer.hold_key("shift", -1)
 
     def test_move_reports_setter_failures(self):
-        pointer = Pointer(
-            dispatcher=self.dispatcher, set_cursor_position=lambda x, y: False
-        )
+        pointer = Pointer(dispatcher=self.dispatcher, set_cursor_position=lambda x, y: False)
 
         with self.assertRaisesRegex(OSError, "SetCursorPos failed"):
             pointer.move(1, 2)
@@ -481,9 +468,7 @@ class ComputerUseTests(unittest.TestCase):
     def test_describe_without_detections_says_so(self):
         computer = self.build()
 
-        self.assertEqual(
-            computer.describe(), "No matching region was found on the screen."
-        )
+        self.assertEqual(computer.describe(), "No matching region was found on the screen.")
 
     def test_save_annotated_requires_a_screenshot(self):
         computer = self.build()
@@ -575,9 +560,7 @@ class ComputerUseTests(unittest.TestCase):
     def test_mark_object_points_at_the_element_and_explains_it(self):
         computer = self.build([[Detection("render button", (10, 20, 30, 40))]])
 
-        detection = computer.mark_object(
-            "кнопка рендера", "Запускает просчёт таймлайна", duration=3.0
-        )
+        detection = computer.mark_object("кнопка рендера", "Запускает просчёт таймлайна", duration=3.0)
 
         self.assertEqual(detection.label, "render button")
         self.assertEqual(self.pointer.moves, [(20, 30)])
@@ -592,9 +575,7 @@ class ComputerUseTests(unittest.TestCase):
     def test_mark_object_can_use_an_explicit_title_and_leave_the_pointer(self):
         computer = self.build([[Detection("btn", (10, 20, 30, 40))]])
 
-        computer.mark_object(
-            "render", "note", title="Кнопка Render", move_pointer=False
-        )
+        computer.mark_object("render", "note", title="Кнопка Render", move_pointer=False)
 
         self.assertEqual(self.pointer.moves, [])
         self.assertEqual(self.overlay.markers[0].title, "Кнопка Render")
@@ -721,9 +702,7 @@ class TwoStageLocateTests(unittest.TestCase):
 
         region = self.expected_region(self.COARSE)
         self.assertEqual(locator.sizes[0], self.SCREEN)
-        self.assertEqual(
-            locator.sizes[1], (region[2] - region[0], region[3] - region[1])
-        )
+        self.assertEqual(locator.sizes[1], (region[2] - region[0], region[3] - region[1]))
         self.assertEqual(
             detections[0].box,
             (
@@ -780,9 +759,7 @@ class TwoStageLocateTests(unittest.TestCase):
         locator = StubLocator([(20, 659, 560, 701)])
         computer = self.build(locator)
 
-        detections = computer.locate_object(
-            "the message input field", mode="first", region=region, refine=False
-        )
+        detections = computer.locate_object("the message input field", mode="first", region=region, refine=False)
 
         self.assertEqual(locator.sizes, [(700, 720)])
         self.assertEqual(detections[0].box, (1220, 949, 1760, 991))
@@ -794,9 +771,7 @@ class TwoStageLocateTests(unittest.TestCase):
         locator = StubLocator([(20, 659, 560, 701)])
         computer = self.build(locator)
 
-        detections = computer.locate_object(
-            "the message input field", mode="first", region=region
-        )
+        detections = computer.locate_object("the message input field", mode="first", region=region)
 
         self.assertEqual(computer.inference_calls, 1)
         self.assertEqual(detections[0].box, (1220, 949, 1760, 991))

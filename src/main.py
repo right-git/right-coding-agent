@@ -2,17 +2,17 @@ import asyncio
 import time
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from src.config.base import settings
 from src.config.logging import logger
-from src.llm.openrouter import OpenRouterCatalog
+from src.config.settings import settings
+from src.llm.providers import OpenRouterCatalog
 from src.llm.types import LLMProvider
-from src.llm.usage import (
-    SessionUsage,
+from src.llm.statistics import SessionUsage, turn_usage_from_messages
+from src.llm.utils import (
     collect_message_ids,
-    turn_usage_from_messages,
+    is_empty_final_response,
+    trim_incomplete_tool_calls,
 )
 from src.ui import ChatUI
-from src.utils.functions import is_empty_final_response, trim_incomplete_tool_calls
 
 available_models = [
     "google/gemini-3.7-flash",
@@ -31,7 +31,7 @@ def preload_vision_model() -> None:
     the locator will retry lazily on first use.
     """
     try:
-        from src.llm.computer_tools import warm_up_computer
+        from src.llm.tools import warm_up_computer
 
         logger.info("Preloading the vision locator model")
         warm_up_computer()
@@ -61,15 +61,12 @@ async def report_usage(
         turn = turn_usage_from_messages(response_messages, previous_ids)
         model_info = await catalog.get(model)
         cost = (
-            model_info.cost_of(turn.input_tokens, turn.output_tokens)
-            if model_info is not None and turn.calls
-            else None
+            model_info.cost_of(turn.input_tokens, turn.output_tokens) if model_info is not None and turn.calls else None
         )
         session_usage.add(turn, cost, duration or 0.0)
         ui.print_usage(turn, model_info, cost, session_usage, duration)
         logger.info(
-            "Turn usage model [{}] input [{}] output [{}] context [{}] "
-            "cost [{}] duration [{}] session_tokens [{}]",
+            "Turn usage model [{}] input [{}] output [{}] context [{}] " "cost [{}] duration [{}] session_tokens [{}]",
             model,
             turn.input_tokens,
             turn.output_tokens,
@@ -116,8 +113,7 @@ async def process_user_turn(
             # Seen with Gemini via OpenRouter: a "successful" completion with
             # no text, no tool calls, zero usage. Drop it and nudge once.
             logger.warning(
-                "Model returned an empty final response model [{}]; "
-                "nudging once to continue",
+                "Model returned an empty final response model [{}]; " "nudging once to continue",
                 model,
             )
             retry_messages = [
@@ -135,9 +131,7 @@ async def process_user_turn(
                     "Model returned an empty final response twice model [{}]",
                     model,
                 )
-                ui.print_warning(
-                    "model ended the turn with an empty response twice"
-                )
+                ui.print_warning("model ended the turn with an empty response twice")
 
         trimmed_messages = trim_incomplete_tool_calls(raw_messages)
         new_messages = trimmed_messages[shown_count:]
@@ -145,8 +139,7 @@ async def process_user_turn(
 
         if len(raw_messages) != len(trimmed_messages):
             logger.warning(
-                "Trimmed incomplete tool-call tail model [{}] raw_messages [{}] "
-                "trimmed_messages [{}]",
+                "Trimmed incomplete tool-call tail model [{}] raw_messages [{}] " "trimmed_messages [{}]",
                 model,
                 len(raw_messages),
                 len(trimmed_messages),
@@ -169,9 +162,7 @@ async def process_user_turn(
                 shown_count,
                 len(trimmed_messages),
             )
-            ui.print_warning(
-                "assistant completed the turn but produced no visible output"
-            )
+            ui.print_warning("assistant completed the turn but produced no visible output")
             await report_usage(
                 ui=ui,
                 catalog=catalog,
@@ -211,13 +202,15 @@ async def main():
         logger.exception("Failed to import agent implementation")
         raise
 
-    agents = Agents([
-        LLMProvider(
-            provider_name="openai",
-            api_key=settings.llm_api_key,
-            api_base=settings.llm_api_base,
-        )
-    ])
+    agents = Agents(
+        [
+            LLMProvider(
+                provider_name="openai",
+                api_key=settings.llm_api_key,
+                api_base=settings.llm_api_base,
+            )
+        ]
+    )
 
     catalog = OpenRouterCatalog()
     session_usage = SessionUsage()

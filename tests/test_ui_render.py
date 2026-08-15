@@ -62,9 +62,7 @@ class ToolCallRenderTests(unittest.TestCase):
         ui.print_response(
             [
                 self.ai_with_call("search_tools", {"query": "click button"}),
-                self.ai_with_call(
-                    "get_tool", {"names": ["screen_click", "screen_type"]}
-                ),
+                self.ai_with_call("get_tool", {"names": ["screen_click", "screen_type"]}),
             ]
         )
 
@@ -75,9 +73,7 @@ class ToolCallRenderTests(unittest.TestCase):
     def test_markup_like_content_does_not_break_rendering(self):
         ui = make_ui()
 
-        ui.print_response(
-            [self.ai_with_call("run_tools", {"code": 'return ["red", "[bold]"]'})]
-        )
+        ui.print_response([self.ai_with_call("run_tools", {"code": 'return ["red", "[bold]"]'})])
 
         self.assertIn('["red", "[bold]"]', ui.console.export_text())
 
@@ -87,9 +83,7 @@ class ToolResultRenderTests(unittest.TestCase):
         ui = make_ui()
         content = '{"result": "ok",\n "blob": "' + "Q" * 5000 + '"}'
 
-        ui.print_response(
-            [ToolMessage(content=content, tool_call_id="c1", name="run_tools")]
-        )
+        ui.print_response([ToolMessage(content=content, tool_call_id="c1", name="run_tools")])
 
         rendered = ui.console.export_text()
         self.assertIn("⎿", rendered)

@@ -5,9 +5,8 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src.llm.meta_tools import (
+from src.llm.tools import (
     MAX_RESULT_CHARS,
     META_TOOLS,
     ToolRegistry,
@@ -188,9 +187,7 @@ class MetaToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Unknown tool: 'nope'", result)
 
     async def test_get_tool_accepts_a_loose_string_and_dedupes(self):
-        result = await get_tool.ainvoke(
-            {"names": "fetch_page, job_status fetch_page"}
-        )
+        result = await get_tool.ainvoke({"names": "fetch_page, job_status fetch_page"})
 
         self.assertEqual(result.count("fetch_page(url, timeout=5)"), 1)
         self.assertIn("job_status(job_id)", result)
@@ -254,10 +251,7 @@ class MetaToolTests(unittest.IsolatedAsyncioTestCase):
             await run_tools.ainvoke(
                 {
                     "code": (
-                        "try:\n"
-                        "    boom()\n"
-                        "except Exception as error:\n"
-                        '    return "caught: " + str(error)\n'
+                        "try:\n" "    boom()\n" "except Exception as error:\n" '    return "caught: " + str(error)\n'
                     )
                 }
             )
@@ -274,9 +268,7 @@ class MetaToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("SyntaxError", outcome["error"])
 
     async def test_run_tools_blocks_imports(self):
-        outcome = json.loads(
-            await run_tools.ainvoke({"code": "import os\nreturn os"})
-        )
+        outcome = json.loads(await run_tools.ainvoke({"code": "import os\nreturn os"}))
 
         self.assertIn("PolicyError", outcome["error"])
 

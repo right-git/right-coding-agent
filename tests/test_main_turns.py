@@ -4,10 +4,10 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from src.llm.openrouter import ModelInfo
-from src.llm.usage import SessionUsage
+from src.llm.providers.openrouter import ModelInfo
+from src.llm.statistics import SessionUsage
 from src.main import EMPTY_RESPONSE_NUDGE, process_user_turn
-from src.utils.functions import is_empty_final_response
+from src.llm.utils import is_empty_final_response
 
 
 class ProcessUserTurnTests(unittest.IsolatedAsyncioTestCase):
@@ -105,17 +105,13 @@ class EmptyFinalResponseTests(unittest.TestCase):
         self.assertTrue(is_empty_final_response([AIMessage(content="  \n")]))
 
     def test_blocks_without_text_are_empty(self):
-        message = AIMessage(
-            content=[{"type": "text", "text": ""}, {"type": "reasoning", "summary": []}]
-        )
+        message = AIMessage(content=[{"type": "text", "text": ""}, {"type": "reasoning", "summary": []}])
         self.assertTrue(is_empty_final_response([message]))
 
     def test_text_or_reasoning_summaries_are_not_empty(self):
         self.assertFalse(is_empty_final_response([AIMessage(content="done")]))
         self.assertFalse(
-            is_empty_final_response(
-                [AIMessage(content=[{"type": "reasoning", "summary": [{"text": "thought"}]}])]
-            )
+            is_empty_final_response([AIMessage(content=[{"type": "reasoning", "summary": [{"text": "thought"}]}])])
         )
 
     def test_tool_calls_and_non_ai_tails_are_not_empty(self):
@@ -136,9 +132,7 @@ class EmptyResponseRetryTests(unittest.IsolatedAsyncioTestCase):
         return ui
 
     async def test_empty_final_response_is_retried_with_a_nudge(self):
-        empty_response = {
-            "messages": [HumanMessage("test"), AIMessage(content="", id="empty")]
-        }
+        empty_response = {"messages": [HumanMessage("test"), AIMessage(content="", id="empty")]}
         good_response = {
             "messages": [
                 HumanMessage("test"),
@@ -147,9 +141,7 @@ class EmptyResponseRetryTests(unittest.IsolatedAsyncioTestCase):
             ]
         }
         agents = Mock()
-        agents.right_coding_agent = AsyncMock(
-            side_effect=[empty_response, good_response]
-        )
+        agents.right_coding_agent = AsyncMock(side_effect=[empty_response, good_response])
         ui = self.make_ui()
 
         with patch("src.main.logger"):
@@ -162,24 +154,16 @@ class EmptyResponseRetryTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(agents.right_coding_agent.await_count, 2)
-        retry_messages = agents.right_coding_agent.await_args_list[1].kwargs[
-            "messages"
-        ]
+        retry_messages = agents.right_coding_agent.await_args_list[1].kwargs["messages"]
         self.assertEqual(retry_messages[-1], HumanMessage(EMPTY_RESPONSE_NUDGE))
-        self.assertNotIn(
-            "empty", [getattr(m, "id", None) for m in retry_messages]
-        )
+        self.assertNotIn("empty", [getattr(m, "id", None) for m in retry_messages])
         self.assertEqual(updated[-1], AIMessage(content="done", id="final"))
         ui.print_warning.assert_not_called()
 
     async def test_two_empty_responses_surface_a_warning(self):
-        empty_response = {
-            "messages": [HumanMessage("test"), AIMessage(content="")]
-        }
+        empty_response = {"messages": [HumanMessage("test"), AIMessage(content="")]}
         agents = Mock()
-        agents.right_coding_agent = AsyncMock(
-            side_effect=[empty_response, empty_response]
-        )
+        agents.right_coding_agent = AsyncMock(side_effect=[empty_response, empty_response])
         ui = self.make_ui()
 
         with patch("src.main.logger"):
@@ -244,9 +228,7 @@ class UsageReportingTests(unittest.IsolatedAsyncioTestCase):
             ),
         ]
         agents = Mock()
-        agents.right_coding_agent = AsyncMock(
-            return_value={"messages": response_messages}
-        )
+        agents.right_coding_agent = AsyncMock(return_value={"messages": response_messages})
 
         ui = Mock()
         ui.loading.return_value = nullcontext()
@@ -275,9 +257,7 @@ class UsageReportingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         ui.print_usage.assert_called_once()
-        turn, model_info, cost, session_arg, duration = (
-            ui.print_usage.call_args.args
-        )
+        turn, model_info, cost, session_arg, duration = ui.print_usage.call_args.args
         self.assertGreaterEqual(duration, 0)
         self.assertAlmostEqual(session.duration, duration)
         self.assertEqual(turn.input_tokens, 230)
@@ -293,9 +273,7 @@ class UsageReportingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_usage_reporting_is_skipped_without_a_catalog(self):
         agents = Mock()
-        agents.right_coding_agent = AsyncMock(
-            return_value={"messages": [HumanMessage("test"), AIMessage("done")]}
-        )
+        agents.right_coding_agent = AsyncMock(return_value={"messages": [HumanMessage("test"), AIMessage("done")]})
 
         ui = Mock()
         ui.loading.return_value = nullcontext()

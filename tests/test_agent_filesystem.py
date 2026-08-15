@@ -5,14 +5,14 @@ from unittest.mock import AsyncMock, Mock
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from langchain.agents.middleware import SummarizationMiddleware
 
-from src.llm.log_middleware import MessageLogMiddleware
+from src.llm.middlewares.message_log import MessageLogMiddleware
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.messages import HumanMessage
 from rich.console import Console
 
 from src.config.prompts import Prompts
 from src.llm.agents import Agents
-from src.llm.base import LLMClient
+from src.llm.client import LLMClient
 from src.llm.types import LLMProvider
 from src.main import available_models, trim_incomplete_tool_calls
 from src.ui import ChatUI
@@ -38,12 +38,7 @@ class AgentFilesystemConfigTests(unittest.IsolatedAsyncioTestCase):
         )
 
         middlewares = agent.ask_agent.await_args.kwargs["middlewares"]
-        self.assertFalse(
-            any(
-                isinstance(middleware, FilesystemMiddleware)
-                for middleware in middlewares
-            )
-        )
+        self.assertFalse(any(isinstance(middleware, FilesystemMiddleware) for middleware in middlewares))
 
 
 class ToolContractTests(unittest.IsolatedAsyncioTestCase):
@@ -98,12 +93,7 @@ class ToolContractTests(unittest.IsolatedAsyncioTestCase):
 
         middlewares = agent.ask_agent.await_args.kwargs["middlewares"]
 
-        self.assertTrue(
-            any(
-                isinstance(middleware, SummarizationMiddleware)
-                for middleware in middlewares
-            )
-        )
+        self.assertTrue(any(isinstance(middleware, SummarizationMiddleware) for middleware in middlewares))
         self.assertIsInstance(middlewares[-1], MessageLogMiddleware)
 
     def test_system_prompt_does_not_list_tools(self):
@@ -171,7 +161,7 @@ class ErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
         client.build_chat_model = Mock(return_value=object())  # type: ignore[method-assign]
 
         with self.assertRaisesRegex(RuntimeError, "boom"):
-            with unittest.mock.patch("src.llm.base.create_agent") as create_agent_mock:
+            with unittest.mock.patch("src.llm.client.create_agent") as create_agent_mock:
                 agent = AsyncMock()
                 agent.ainvoke.side_effect = RuntimeError("boom")
                 create_agent_mock.return_value = agent

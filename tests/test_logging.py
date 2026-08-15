@@ -13,10 +13,13 @@ class LoggingManagerTests(unittest.TestCase):
     def test_logging_manager_accepts_runtime_level_changes(self):
         from src.config.logging import LoggingManager
 
-        with patch("src.config.logging.logger.remove") as remove_mock, patch(
-            "src.config.logging.logger.add",
-            side_effect=[1, 2, 3, 4],
-        ) as add_mock:
+        with (
+            patch("src.config.logging.logger.remove") as remove_mock,
+            patch(
+                "src.config.logging.logger.add",
+                side_effect=[1, 2, 3, 4],
+            ) as add_mock,
+        ):
             manager = LoggingManager(
                 log_file="tmp/test.log",
                 level="info",
@@ -64,8 +67,4 @@ class ChatUILoggingCommandTests(unittest.TestCase):
         ui = ChatUI(model="openai/gpt-5.1-codex-mini")
 
         self.assertFalse(ui.has_visible_output([AIMessage(content="")]))
-        self.assertTrue(
-            ui.has_visible_output(
-                [AIMessage(content=[{"type": "text", "text": "done"}])]
-            )
-        )
+        self.assertTrue(ui.has_visible_output([AIMessage(content=[{"type": "text", "text": "done"}])]))

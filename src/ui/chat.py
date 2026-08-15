@@ -15,18 +15,22 @@ from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
 from src.config.logging import app_logging
-from src.llm.log_middleware import scrub_text
-from src.llm.openrouter import ModelInfo
-from src.llm.usage import SessionUsage, TurnUsage, format_duration, format_money
+from src.llm.middlewares import scrub_text
+from src.llm.providers import ModelInfo
+from src.llm.types import TurnUsage
+from src.llm.statistics import SessionUsage
+from src.llm.utils import format_duration, format_money
 
-theme = Theme({
-    "user.prompt": "bold cyan",
-    "assistant.name": "bold magenta",
-    "tool.name": "bold yellow",
-    "info": "dim",
-    "success": "bold green",
-    "error": "bold red",
-})
+theme = Theme(
+    {
+        "user.prompt": "bold cyan",
+        "assistant.name": "bold magenta",
+        "tool.name": "bold yellow",
+        "info": "dim",
+        "success": "bold green",
+        "error": "bold red",
+    }
+)
 
 
 class ChatUI:
@@ -141,9 +145,7 @@ class ChatUI:
             return
         lines = detail.splitlines()
         for line in lines[: self.MAX_DETAIL_LINES]:
-            self.console.print(
-                f"  │ {line}", style="info", markup=False, highlight=False
-            )
+            self.console.print(f"  │ {line}", style="info", markup=False, highlight=False)
         if len(lines) > self.MAX_DETAIL_LINES:
             self.console.print(
                 f"  │ … +{len(lines) - self.MAX_DETAIL_LINES} more lines",
@@ -154,9 +156,7 @@ class ChatUI:
     def _print_tool_result(self, msg: ToolMessage) -> None:
         content_str = str(msg.content)
         is_error = (
-            msg.status == "error"
-            or content_str.startswith("Error")
-            or content_str.startswith("Tool call failed")
+            msg.status == "error" or content_str.startswith("Error") or content_str.startswith("Tool call failed")
         )
         preview = scrub_text(" ".join(content_str.split()), 200)
         self.console.print(
@@ -253,23 +253,22 @@ class ChatUI:
             label, detail = self._format_tool_call(tc)
             self.console.print(f"  ? {label}", style="tool.name", markup=False)
             for line in detail.splitlines()[: self.MAX_DETAIL_LINES]:
-                self.console.print(
-                    f"  │ {line}", style="info", markup=False, highlight=False
-                )
-            self.console.print(
-                "    [Y] approve  [e] edit  [n] reject", style="info"
-            )
+                self.console.print(f"  │ {line}", style="info", markup=False, highlight=False)
+            self.console.print("    [Y] approve  [e] edit  [n] reject", style="info")
             try:
-                choice = (
-                    await self._get_prompt_session().prompt_async("  > ")
-                ).strip().lower()
+                choice = (await self._get_prompt_session().prompt_async("  > ")).strip().lower()
             except (EOFError, KeyboardInterrupt):
                 decisions.append({"type": "reject"})
                 continue
             if choice in ("n", "no", "reject"):
                 decisions.append({"type": "reject"})
             elif choice in ("e", "edit"):
-                decisions.append({"type": "edit", "edited_action": {"name": tc["name"], "args": tc["args"]}})
+                decisions.append(
+                    {
+                        "type": "edit",
+                        "edited_action": {"name": tc["name"], "args": tc["args"]},
+                    }
+                )
             else:
                 decisions.append({"type": "approve"})
         self.console.print()
@@ -315,10 +314,7 @@ class ChatUI:
         if info.context_length:
             parts.append(f"ctx {info.context_length:,}")
         if info.prompt_price is not None and info.completion_price is not None:
-            parts.append(
-                f"${info.prompt_price * 1e6:.3g}/M in, "
-                f"${info.completion_price * 1e6:.3g}/M out"
-            )
+            parts.append(f"${info.prompt_price * 1e6:.3g}/M in, " f"${info.completion_price * 1e6:.3g}/M out")
         return " · ".join(parts) or None
 
     def _model_line(self, model_id: str) -> str:
@@ -342,9 +338,7 @@ class ChatUI:
 
     def _apply_model(self, model_name: str) -> None:
         self.model = model_name
-        self.console.print(
-            f"  switched to {self._model_line(model_name)}", style="success"
-        )
+        self.console.print(f"  switched to {self._model_line(model_name)}", style="success")
 
     def _switch_model(self, model_name: str) -> str | None:
         if model_name in self.available_models or model_name in self.model_catalog:
@@ -361,29 +355,22 @@ class ChatUI:
             self._apply_model(candidates[0])
             return None
         if candidates:
-            self.console.print(
-                f"  {len(candidates)} models match {model_name!r}:", style="info"
-            )
+            self.console.print(f"  {len(candidates)} models match {model_name!r}:", style="info")
             for candidate in candidates[:8]:
                 self.console.print(f"    {self._model_line(candidate)}", style="info")
             if len(candidates) > 8:
-                self.console.print(
-                    f"    … and {len(candidates) - 8} more", style="info"
-                )
+                self.console.print(f"    … and {len(candidates) - 8} more", style="info")
             return None
 
         if not self.model_catalog:
             self.model = model_name
             self.console.print(
-                f"  switched to {model_name} "
-                "(not verified — OpenRouter catalog unavailable)",
+                f"  switched to {model_name} " "(not verified — OpenRouter catalog unavailable)",
                 style="success",
             )
             return None
 
-        self.console.print(
-            f"  unknown model: {model_name}", style="error"
-        )
+        self.console.print(f"  unknown model: {model_name}", style="error")
         return None
 
     @staticmethod
@@ -412,25 +399,19 @@ class ChatUI:
     ) -> None:
         """One dim footer line: context fill, turn tokens and cost, session totals."""
         if turn.calls == 0:
-            self.console.print(
-                "  usage: provider reported no token counts", style="info"
-            )
+            self.console.print("  usage: provider reported no token counts", style="info")
             return
 
         limit = model_info.context_length if model_info else None
         if limit:
             percent = 100 * turn.context_tokens / limit
             bar = self._context_bar(turn.context_tokens, limit)
-            context_part = (
-                f"ctx {bar} {turn.context_tokens:,}/{limit:,} ({percent:.1f}%)"
-            )
+            context_part = f"ctx {bar} {turn.context_tokens:,}/{limit:,} ({percent:.1f}%)"
         else:
             context_part = f"ctx {turn.context_tokens:,} (limit unknown)"
 
         turn_part = f"turn {turn.input_tokens:,} in + {turn.output_tokens:,} out"
-        turn_part += (
-            f" ({format_money(cost)})" if cost is not None else " (price unknown)"
-        )
+        turn_part += f" ({format_money(cost)})" if cost is not None else " (price unknown)"
 
         parts = [context_part, turn_part]
 

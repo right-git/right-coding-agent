@@ -39,3 +39,13 @@ torchvision = [
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
+
+[dependency-groups]
+dev = [
+    "black>=26.5.1",
+    "flake8>=7.3.0",
+]
+
+[tool.black]
+target-version = ["py312"]
+line-length = 120

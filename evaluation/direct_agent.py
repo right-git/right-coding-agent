@@ -10,11 +10,9 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain.agents.middleware import SummarizationMiddleware
 
 from src.llm.agents import Agents
-from src.llm.attachments import AttachedImagesMiddleware
-from src.llm.log_middleware import MessageLogMiddleware
+from src.llm.middlewares import AttachedImagesMiddleware, MessageLogMiddleware
 
 from .direct_tools import DIRECT_TOOLS
-
 
 DIRECT_CODING_AGENT_SYS = """\
 You are right_coding_agent, a code assistant agent working inside the current project.
@@ -63,6 +61,4 @@ class DirectAgents(Agents):
         model: str,
         thread_id: str | None = None,
     ):
-        return await self.direct_coding_agent(
-            messages=messages, model=model, thread_id=thread_id
-        )
+        return await self.direct_coding_agent(messages=messages, model=model, thread_id=thread_id)

@@ -32,10 +32,7 @@ class LoggingManager:
     def _normalize_level(self, level: str) -> str:
         normalized = level.strip().upper()
         if normalized not in self.VALID_LEVELS:
-            raise ValueError(
-                f"Invalid log level: {level}. "
-                f"Expected one of: {', '.join(sorted(self.VALID_LEVELS))}"
-            )
+            raise ValueError(f"Invalid log level: {level}. " f"Expected one of: {', '.join(sorted(self.VALID_LEVELS))}")
         return normalized
 
     def configure(
@@ -67,10 +64,7 @@ class LoggingManager:
                 sys.stderr,
                 level=self.level,
                 colorize=False,
-                format=(
-                    "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<8} | "
-                    "{name}:{function}:{line} - {message}"
-                ),
+                format=("{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<8} | " "{name}:{function}:{line} - {message}"),
             )
 
         logger.add(
@@ -79,10 +73,7 @@ class LoggingManager:
             rotation=self.rotation,
             compression=self.compression,
             encoding="utf-8",
-            format=(
-                "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<8} | "
-                "{name}:{function}:{line} - {message}"
-            ),
+            format=("{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<8} | " "{name}:{function}:{line} - {message}"),
             backtrace=True,
             diagnose=True,
         )

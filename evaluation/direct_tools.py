@@ -17,9 +17,7 @@ from collections.abc import Sequence
 
 from langchain_core.tools import BaseTool, StructuredTool
 
-from src.llm.attachments import collecting_images
-from src.llm.computer_tools import COMPUTER_TOOLS
-from src.llm.tools import web_search
+from src.llm.tools import COMPUTER_TOOLS, collecting_images, web_search
 
 
 def as_direct_tool(tool_obj: BaseTool) -> BaseTool:

@@ -1,15 +1,12 @@
 from typing import Any
 
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
-from langchain.agents.middleware import (
-    LLMToolSelectorMiddleware,
-    SummarizationMiddleware,
-)
-from .attachments import AttachedImagesMiddleware
-from .log_middleware import MessageLogMiddleware
-from .meta_tools import META_TOOLS
+from langchain.agents.middleware import SummarizationMiddleware
 from src.config.prompts import Prompts
-from .base import LLMClient
+
+from .client import LLMClient
+from .middlewares import AttachedImagesMiddleware, MessageLogMiddleware
+from .tools import META_TOOLS
 
 
 class Agents(LLMClient):
@@ -21,7 +18,7 @@ class Agents(LLMClient):
     ):
         # The agent's whole tool surface is the three meta tools: every other
         # capability is discovered through search_tools / get_tool and driven
-        # from run_tools scripts (see src/llm/meta_tools.py).
+        # from run_tools scripts (see src/llm/tools/meta/tool.py).
         tools = [
             *META_TOOLS,
         ]

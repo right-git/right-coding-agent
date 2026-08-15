@@ -3,11 +3,11 @@ from io import StringIO
 
 from rich.console import Console
 
-from src.llm.openrouter import ModelInfo
-from src.llm.usage import SessionUsage, TurnUsage
+from src.llm.providers.openrouter import ModelInfo
+from src.llm.types import TurnUsage
+from src.llm.statistics import SessionUsage
 from src.ui import ChatUI
 from src.ui.chat import theme
-
 
 GEMINI = ModelInfo(
     id="google/gemini-3.7-flash",
@@ -136,9 +136,7 @@ class UsageFooterTests(unittest.TestCase):
     def test_footer_omits_time_when_duration_is_unknown(self):
         ui = make_ui()
         session = SessionUsage()
-        turn = TurnUsage(
-            input_tokens=100, output_tokens=10, context_tokens=110, calls=1
-        )
+        turn = TurnUsage(input_tokens=100, output_tokens=10, context_tokens=110, calls=1)
         session.add(turn, 0.001)
 
         ui.print_usage(turn, GEMINI, 0.001, session)
@@ -148,9 +146,7 @@ class UsageFooterTests(unittest.TestCase):
     def test_footer_omits_the_tools_segment_when_none_were_called(self):
         ui = make_ui()
         session = SessionUsage()
-        turn = TurnUsage(
-            input_tokens=100, output_tokens=10, context_tokens=110, calls=1
-        )
+        turn = TurnUsage(input_tokens=100, output_tokens=10, context_tokens=110, calls=1)
         session.add(turn, 0.001)
 
         ui.print_usage(turn, GEMINI, 0.001, session)
@@ -160,24 +156,16 @@ class UsageFooterTests(unittest.TestCase):
     def test_context_bar_fills_and_changes_color_with_usage(self):
         ui = make_ui()
 
-        self.assertEqual(
-            ui._context_bar(0, 100), "[green]" + "[/]" + "░" * 20
-        )
-        self.assertEqual(
-            ui._context_bar(50, 100), "[green]" + "█" * 10 + "[/]" + "░" * 10
-        )
-        self.assertEqual(
-            ui._context_bar(80, 100), "[yellow]" + "█" * 16 + "[/]" + "░" * 4
-        )
+        self.assertEqual(ui._context_bar(0, 100), "[green]" + "[/]" + "░" * 20)
+        self.assertEqual(ui._context_bar(50, 100), "[green]" + "█" * 10 + "[/]" + "░" * 10)
+        self.assertEqual(ui._context_bar(80, 100), "[yellow]" + "█" * 16 + "[/]" + "░" * 4)
         self.assertEqual(ui._context_bar(100, 100), "[red]" + "█" * 20 + "[/]")
         self.assertEqual(ui._context_bar(250, 100), "[red]" + "█" * 20 + "[/]")
 
     def test_footer_without_model_info_marks_unknown_limit_and_price(self):
         ui = make_ui()
         session = SessionUsage()
-        turn = TurnUsage(
-            input_tokens=100, output_tokens=10, context_tokens=110, calls=1
-        )
+        turn = TurnUsage(input_tokens=100, output_tokens=10, context_tokens=110, calls=1)
         session.add(turn, None)
 
         ui.print_usage(turn, None, None, session)
@@ -192,9 +180,7 @@ class UsageFooterTests(unittest.TestCase):
 
         ui.print_usage(TurnUsage(), GEMINI, None, SessionUsage())
 
-        self.assertIn(
-            "provider reported no token counts", ui.console.export_text()
-        )
+        self.assertIn("provider reported no token counts", ui.console.export_text())
 
 
 if __name__ == "__main__":

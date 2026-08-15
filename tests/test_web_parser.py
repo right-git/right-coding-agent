@@ -1,21 +1,22 @@
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
-from src.tools.web_parser import WebParser
+from src.llm.tools.parser import WebParser
+from src.llm.tools.parser.utils import as_content_text
 
 
 class ContentTextTests(unittest.TestCase):
     def test_dict_results_yield_their_content_string(self):
-        self.assertEqual(WebParser._as_content_text({"content": "hello"}), "hello")
+        self.assertEqual(as_content_text({"content": "hello"}), "hello")
 
     def test_dicts_without_usable_content_yield_empty_text(self):
-        self.assertEqual(WebParser._as_content_text({}), "")
-        self.assertEqual(WebParser._as_content_text({"content": None}), "")
-        self.assertEqual(WebParser._as_content_text({"content": 5}), "")
+        self.assertEqual(as_content_text({}), "")
+        self.assertEqual(as_content_text({"content": None}), "")
+        self.assertEqual(as_content_text({"content": 5}), "")
 
     def test_strings_pass_through_and_none_becomes_empty(self):
-        self.assertEqual(WebParser._as_content_text("markdown"), "markdown")
-        self.assertEqual(WebParser._as_content_text(None), "")
+        self.assertEqual(as_content_text("markdown"), "markdown")
+        self.assertEqual(as_content_text(None), "")
 
 
 class ParsePageTests(unittest.IsolatedAsyncioTestCase):
@@ -39,9 +40,7 @@ class ParsePageTests(unittest.IsolatedAsyncioTestCase):
         html = "<html><body><p>Fallback text</p></body></html>"
         self.parser.make_request = AsyncMock(return_value=Mock(text=html))
 
-        with patch.object(
-            self.parser, "parse_html", side_effect=RuntimeError("boom")
-        ):
+        with patch.object(self.parser, "parse_html", side_effect=RuntimeError("boom")):
             result = await self.parser.parse_page("https://example.test")
 
         self.assertIsInstance(result, str)
@@ -52,7 +51,7 @@ class ParsePageTests(unittest.IsolatedAsyncioTestCase):
 
         result = self.parser.parse_html(html)
 
-        self.assertIn("ok", WebParser._as_content_text(result))
+        self.assertIn("ok", as_content_text(result))
 
 
 if __name__ == "__main__":

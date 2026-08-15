@@ -14,11 +14,12 @@ class MainStartupTests(unittest.IsolatedAsyncioTestCase):
         catalog = Mock()
         catalog.models = AsyncMock(return_value={})
 
-        with patch("src.main.ChatUI", return_value=ui), patch(
-            "src.main.OpenRouterCatalog", return_value=catalog
-        ), patch("src.main.preload_vision_model"), patch(
-            "src.llm.agents.Agents"
-        ) as agents_cls:
+        with (
+            patch("src.main.ChatUI", return_value=ui),
+            patch("src.main.OpenRouterCatalog", return_value=catalog),
+            patch("src.main.preload_vision_model"),
+            patch("src.llm.agents.Agents") as agents_cls,
+        ):
             agents_cls.return_value = Mock()
 
             with self.assertRaises(SystemExit):

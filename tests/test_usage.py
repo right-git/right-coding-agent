@@ -2,14 +2,9 @@ import unittest
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from src.llm.usage import (
-    SessionUsage,
-    TurnUsage,
-    collect_message_ids,
-    format_duration,
-    format_money,
-    turn_usage_from_messages,
-)
+from src.llm.types import TurnUsage
+from src.llm.statistics import SessionUsage, turn_usage_from_messages
+from src.llm.utils import collect_message_ids, format_duration, format_money
 
 
 def ai(identifier, input_tokens, output_tokens):
@@ -26,9 +21,7 @@ def ai(identifier, input_tokens, output_tokens):
 
 class TurnUsageTests(unittest.TestCase):
     def test_sums_all_calls_and_takes_context_from_the_last(self):
-        usage = turn_usage_from_messages(
-            [HumanMessage("hi"), ai("a", 100, 20), ai("b", 130, 30)]
-        )
+        usage = turn_usage_from_messages([HumanMessage("hi"), ai("a", 100, 20), ai("b", 130, 30)])
 
         self.assertEqual(usage.input_tokens, 230)
         self.assertEqual(usage.output_tokens, 50)
@@ -40,9 +33,7 @@ class TurnUsageTests(unittest.TestCase):
         history = [ai("old", 500, 50)]
         response = [*history, HumanMessage("hi"), ai("new", 100, 10)]
 
-        usage = turn_usage_from_messages(
-            response, collect_message_ids(history)
-        )
+        usage = turn_usage_from_messages(response, collect_message_ids(history))
 
         self.assertEqual(usage.input_tokens, 100)
         self.assertEqual(usage.calls, 1)
@@ -109,9 +100,7 @@ class TurnUsageTests(unittest.TestCase):
         self.assertEqual(usage.script_tool_calls, 5)
 
     def test_history_tool_messages_are_excluded_by_id(self):
-        old = ToolMessage(
-            content='{"tool_calls": 9}', tool_call_id="c0", id="old"
-        )
+        old = ToolMessage(content='{"tool_calls": 9}', tool_call_id="c0", id="old")
 
         usage = turn_usage_from_messages(
             [old, ToolMessage(content='{"tool_calls": 2}', tool_call_id="c1")],

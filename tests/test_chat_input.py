@@ -47,9 +47,7 @@ class ChatUIInputTests(unittest.IsolatedAsyncioTestCase):
         ui.prompt_session = Mock()
         ui.prompt_session.prompt_async = AsyncMock(return_value="y")
 
-        result = await ui.get_tool_approval(
-            [{"name": "execute", "args": {"command": "rm file.txt"}}]
-        )
+        result = await ui.get_tool_approval([{"name": "execute", "args": {"command": "rm file.txt"}}])
 
         self.assertEqual(result, {"decisions": [{"type": "approve"}]})
         ui.prompt_session.prompt_async.assert_awaited_once_with("  > ")

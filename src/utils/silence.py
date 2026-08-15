@@ -14,7 +14,6 @@ import threading
 import warnings
 from contextlib import contextmanager
 
-
 _local = threading.local()
 _lock = threading.Lock()
 

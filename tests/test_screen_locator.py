@@ -6,9 +6,8 @@ from unittest.mock import Mock, patch
 
 from PIL import Image
 
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src.tools.computer_use import (
+from src.llm.tools.computer import (
     ComputerUse,
     Detection,
     NullOverlay,
@@ -21,8 +20,8 @@ from src.tools.computer_use import (
     primary_screen_size,
     select_targets,
 )
-from src.tools.computer_use.cli import parse_command, run_interactive_loop
-from src.tools.computer_use.fakes import RecordingPointer, ScriptedLocator, StaticScreen
+from src.llm.tools.computer.cli import parse_command, run_interactive_loop
+from src.llm.tools.computer.fakes import RecordingPointer, ScriptedLocator, StaticScreen
 
 
 class ScreenAndPointerAdapterTests(unittest.TestCase):
@@ -57,9 +56,7 @@ class ScreenAndPointerAdapterTests(unittest.TestCase):
     def test_primary_screen_size_falls_back_to_a_screenshot(self):
         grabber = Mock(return_value=Image.new("RGB", (800, 600)))
 
-        size = primary_screen_size(
-            platform="linux", get_system_metrics=None, grabber=grabber
-        )
+        size = primary_screen_size(platform="linux", get_system_metrics=None, grabber=grabber)
 
         self.assertEqual(size, (800, 600))
 
@@ -140,7 +137,7 @@ class ScreenAndPointerAdapterTests(unittest.TestCase):
         self.assertEqual(libraries.mock_calls, [])
 
     def test_default_move_pointer_requires_windows(self):
-        with patch("src.tools.computer_use.pointer.sys.platform", "linux"):
+        with patch("src.llm.tools.computer.pointer.sys.platform", "linux"):
             with self.assertRaisesRegex(RuntimeError, "requires Windows"):
                 move_pointer(12, 34)
 
@@ -177,9 +174,7 @@ class ParseDetectionsTests(unittest.TestCase):
 
     def test_malformed_boxes_are_ignored(self):
         detections = parse_detections(
-            "<ref>targets</ref>"
-            "<box><10><20><30></box>"
-            "<box><-10><+20><300><400></box>",
+            "<ref>targets</ref>" "<box><10><20><30></box>" "<box><-10><+20><300><400></box>",
             (1000, 1000),
         )
 
@@ -201,8 +196,7 @@ class ParseDetectionsTests(unittest.TestCase):
 
     def test_labeled_box_after_unterminated_box_is_recovered(self):
         detections = parse_detections(
-            "<box><10><20><30>"
-            "<ref>good</ref><box><100><200><300><400></box>",
+            "<box><10><20><30>" "<ref>good</ref><box><100><200><300><400></box>",
             (1000, 1000),
         )
 
@@ -290,8 +284,7 @@ class CommandParsingTests(unittest.TestCase):
     def test_mark_command_without_a_note_keeps_the_description(self):
         command = parse_command(":mark render button")
 
-        self.assertEqual((command.kind, command.argument, command.note),
-                         ("mark", "render button", ""))
+        self.assertEqual((command.kind, command.argument, command.note), ("mark", "render button", ""))
 
     def test_mark_command_requires_a_description(self):
         with self.assertRaisesRegex(ValueError, "Use :mark"):
@@ -433,9 +426,7 @@ class InteractiveLoopTests(unittest.TestCase):
         input_fn = Mock(side_effect=self.input_from("   ", "exit"))
         computer = self.build_computer(locator=ScriptedLocator([[]]))
 
-        run_interactive_loop(
-            computer, input_fn=input_fn, output_fn=output, pause_fn=Mock()
-        )
+        run_interactive_loop(computer, input_fn=input_fn, output_fn=output, pause_fn=Mock())
 
         self.assertEqual(self.screen.captures, 0)
         help_text = output.call_args_list[0].args[0]
@@ -510,15 +501,11 @@ class InteractiveLoopTests(unittest.TestCase):
 
     def test_mark_command_moves_the_pointer_and_shows_a_tooltip(self):
         output = Mock()
-        computer = self.build_computer(
-            locator=ScriptedLocator([[Detection("render button", (10, 20, 30, 40))]])
-        )
+        computer = self.build_computer(locator=ScriptedLocator([[Detection("render button", (10, 20, 30, 40))]]))
 
         run_interactive_loop(
             computer,
-            input_fn=self.input_from(
-                ":mark render button | starts the export", "exit"
-            ),
+            input_fn=self.input_from(":mark render button | starts the export", "exit"),
             output_fn=output,
             pause_fn=Mock(),
         )
@@ -535,9 +522,7 @@ class InteractiveLoopTests(unittest.TestCase):
 
     def test_click_command_clicks_the_center_of_the_match(self):
         output = Mock()
-        computer = self.build_computer(
-            locator=ScriptedLocator([[Detection("ok", (10, 10, 30, 30))]])
-        )
+        computer = self.build_computer(locator=ScriptedLocator([[Detection("ok", (10, 10, 30, 30))]]))
 
         run_interactive_loop(
             computer,

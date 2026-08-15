@@ -6,9 +6,8 @@ from unittest.mock import Mock
 
 from PIL import Image
 
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src.llm.computer_tools import (
+from src.llm.tools.computer import (
     COMPUTER_TOOLS,
     get_computer,
     screen_click,
@@ -19,8 +18,8 @@ from src.llm.computer_tools import (
     screen_type,
     set_computer,
 )
-from src.tools.computer_use import ComputerUse, Detection, NullOverlay
-from src.tools.computer_use.fakes import (
+from src.llm.tools.computer import ComputerUse, Detection, NullOverlay
+from src.llm.tools.computer.fakes import (
     RecordingPointer,
     ScriptedLocator,
     StaticScreen,
@@ -74,9 +73,7 @@ class ComputerToolTests(unittest.IsolatedAsyncioTestCase):
 
         result = await screen_locate.ainvoke({"description": "save button"})
 
-        self.assertEqual(
-            result, "1. save: box=(10, 20, 30, 40), center=(20, 30), at top-left"
-        )
+        self.assertEqual(result, "1. save: box=(10, 20, 30, 40), center=(20, 30), at top-left")
 
     async def test_locate_reports_when_nothing_matches(self):
         self.install([[]])
@@ -88,9 +85,7 @@ class ComputerToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_mark_points_at_the_element_and_keeps_the_note(self):
         self.install([[Detection("render button", (10, 20, 30, 40))]])
 
-        result = await screen_mark.ainvoke(
-            {"description": "кнопка рендера", "note": "Запускает просчёт"}
-        )
+        result = await screen_mark.ainvoke({"description": "кнопка рендера", "note": "Запускает просчёт"})
 
         self.assertIn("render button", result)
         self.assertIn("(20, 30)", result)
@@ -165,9 +160,7 @@ class ComputerToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_click_match_picks_one_of_several(self):
         self.install_two_inputs()
 
-        result = await screen_click.ainvoke(
-            {"description": "input field", "match": 2}
-        )
+        result = await screen_click.ainvoke({"description": "input field", "match": 2})
 
         self.assertIn("Clicked 'search field'", result)
         self.assertEqual(self.pointer.clicks, [("left", 1, ())])
@@ -176,9 +169,7 @@ class ComputerToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_click_match_out_of_range_lists_candidates(self):
         self.install_two_inputs()
 
-        result = await screen_click.ainvoke(
-            {"description": "input field", "match": 5}
-        )
+        result = await screen_click.ainvoke({"description": "input field", "match": 5})
 
         self.assertIn("match=5 is out of range", result)
         self.assertIn("address bar", result)
@@ -187,9 +178,7 @@ class ComputerToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_mark_refuses_ambiguous_descriptions(self):
         self.install_two_inputs()
 
-        result = await screen_mark.ainvoke(
-            {"description": "input field", "note": "n"}
-        )
+        result = await screen_mark.ainvoke({"description": "input field", "note": "n"})
 
         self.assertIn("Did not mark: 2 elements matched", result)
         self.assertEqual(self.overlay.markers, [])
@@ -197,9 +186,7 @@ class ComputerToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_mark_match_picks_one_of_several(self):
         self.install_two_inputs()
 
-        result = await screen_mark.ainvoke(
-            {"description": "input field", "note": "n", "match": 1}
-        )
+        result = await screen_mark.ainvoke({"description": "input field", "note": "n", "match": 1})
 
         self.assertIn("Marked 'address bar'", result)
         self.assertEqual(self.overlay.markers[0].title, "address bar")

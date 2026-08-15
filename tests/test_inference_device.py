@@ -9,11 +9,10 @@ from unittest.mock import MagicMock, Mock, patch
 
 from PIL import Image
 
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src.tools.computer_use import Detection, save_annotated_image
-from src.tools.computer_use import locator as locator_module
-from src.tools.computer_use.locator import LocateAnythingLocator
+from src.llm.tools.computer import Detection, save_annotated_image
+from src.llm.tools.computer import locator as locator_module
+from src.llm.tools.computer.locator import LocateAnythingLocator
 
 
 class ModelSourceTests(unittest.TestCase):
@@ -108,12 +107,8 @@ class RuntimeTests(unittest.TestCase):
 
         runtime = locator_module.load_runtime()
 
-        tokenizer_loader.assert_called_once_with(
-            locator_module.MODEL, trust_remote_code=True
-        )
-        processor_loader.assert_called_once_with(
-            locator_module.MODEL, trust_remote_code=True
-        )
+        tokenizer_loader.assert_called_once_with(locator_module.MODEL, trust_remote_code=True)
+        processor_loader.assert_called_once_with(locator_module.MODEL, trust_remote_code=True)
         model_loader.assert_called_once_with(
             locator_module.MODEL,
             dtype=locator_module.torch.bfloat16,
@@ -162,9 +157,7 @@ class RuntimeTests(unittest.TestCase):
         processor.py_apply_chat_template.return_value = "templated prompt"
         processor.process_vision_info.return_value = (["processed image"], None)
         processor.return_value = inputs
-        model.generate.return_value = (
-            "<ref>outline button</ref><box><100><200><500><600></box>"
-        )
+        model.generate.return_value = "<ref>outline button</ref><box><100><200><500><600></box>"
         runtime = locator_module.InferenceRuntime(
             tokenizer=tokenizer,
             processor=processor,
@@ -174,9 +167,7 @@ class RuntimeTests(unittest.TestCase):
         )
         screenshot = Image.new("RGB", (1600, 800), "white")
 
-        detections = locator_module.locate_on_screen(
-            runtime, screenshot, "outline button"
-        )
+        detections = locator_module.locate_on_screen(runtime, screenshot, "outline button")
 
         self.assertEqual(
             detections,
@@ -190,9 +181,7 @@ class RuntimeTests(unittest.TestCase):
             messages[0]["content"][1]["text"],
             locator_module.build_gui_prompt("outline button"),
         )
-        processor.py_apply_chat_template.assert_called_once_with(
-            messages, tokenize=False, add_generation_prompt=True
-        )
+        processor.py_apply_chat_template.assert_called_once_with(messages, tokenize=False, add_generation_prompt=True)
         processor.process_vision_info.assert_called_once_with(messages)
         processor.assert_called_once_with(
             text=["templated prompt"],
@@ -217,9 +206,7 @@ class LocatorTests(unittest.TestCase):
         loader = Mock(return_value=object())
         locator = LocateAnythingLocator(loader=loader)
 
-        with patch.object(
-            locator_module, "locate_on_screen", return_value=[]
-        ) as locate_on_screen:
+        with patch.object(locator_module, "locate_on_screen", return_value=[]) as locate_on_screen:
             locator.load()
 
         locate_on_screen.assert_called_once()
@@ -229,9 +216,7 @@ class LocatorTests(unittest.TestCase):
         runtime = object()
         locator = LocateAnythingLocator(loader=Mock(return_value=runtime))
 
-        with patch.object(
-            locator_module, "locate_on_screen", side_effect=RuntimeError("no cuda")
-        ):
+        with patch.object(locator_module, "locate_on_screen", side_effect=RuntimeError("no cuda")):
             self.assertIs(locator.load(), runtime)
 
     def test_the_runtime_is_loaded_once_and_reused_for_every_query(self):
@@ -242,9 +227,7 @@ class LocatorTests(unittest.TestCase):
         second_image = Image.new("RGB", (20, 20))
 
         self.assertFalse(locator.is_loaded)
-        with patch.object(
-            locator_module, "locate_on_screen", return_value=[]
-        ) as locate_on_screen:
+        with patch.object(locator_module, "locate_on_screen", return_value=[]) as locate_on_screen:
             locator.locate(first_image, "first")
             locator.locate(second_image, "second")
 

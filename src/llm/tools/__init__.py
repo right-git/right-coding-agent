@@ -1,0 +1,53 @@
+"""The agent's tool layer — one subpackage per concern.
+
+- `meta/` — the three meta tools the model sees (`search_tools` /
+  `get_tool` / `run_tools`), the `ToolRegistry` behind them, the default
+  registry, the image-attachment channel, and the `sandbox/` interpreter
+  that executes `run_tools` scripts;
+- `parser/`, `computer/` — concrete capabilities, each with the fixed shape
+  `tool.py` (the `@tool` functions the LLM receives) + `service.py` (the
+  class doing the real work) + optional `utils.py`; new tools follow the
+  same pattern and get registered in `meta/defaults.py`.
+
+Instrumentation of the layer (the script tool-call counter) lives in
+`src.llm.statistics`.
+"""
+
+from .computer.tool import (
+    COMPUTER_TOOLS,
+    get_computer,
+    set_computer,
+    warm_up_computer,
+)
+from .meta.attachments import attach_image, collecting_images
+from .meta.defaults import get_registry, set_registry
+from .meta.registry import RESERVED_SCRIPT_NAMES, ToolRegistry
+from .meta.tool import (
+    MAX_ATTACHED_IMAGES,
+    MAX_RESULT_CHARS,
+    META_TOOLS,
+    get_tool,
+    run_tools,
+    search_tools,
+)
+from .parser.tool import web_search
+
+__all__ = [
+    "COMPUTER_TOOLS",
+    "MAX_ATTACHED_IMAGES",
+    "MAX_RESULT_CHARS",
+    "META_TOOLS",
+    "RESERVED_SCRIPT_NAMES",
+    "ToolRegistry",
+    "attach_image",
+    "collecting_images",
+    "get_computer",
+    "get_registry",
+    "get_tool",
+    "run_tools",
+    "search_tools",
+    "set_computer",
+    "set_registry",
+    "warm_up_computer",
+    "web_search",
+]
