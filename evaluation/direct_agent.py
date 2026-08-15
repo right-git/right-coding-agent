@@ -31,6 +31,8 @@ class DirectAgents(Agents):
         messages: list[HumanMessage | AIMessage | ToolMessage],
         model: str,
         thread_id: str | None = None,
+        on_message=None,
+        on_token=None,
     ):
         # Mirrors Agents.right_coding_agent so only the tool wiring differs.
         return await self.ask_agent(
@@ -39,6 +41,8 @@ class DirectAgents(Agents):
             agent_input={"messages": messages},
             tools=[*DIRECT_TOOLS],
             thread_id=thread_id,
+            on_message=on_message,
+            on_token=on_token,
             middlewares=[
                 AttachedImagesMiddleware(),
                 SummarizationMiddleware(
@@ -60,5 +64,13 @@ class DirectAgents(Agents):
         messages: list[HumanMessage | AIMessage | ToolMessage],
         model: str,
         thread_id: str | None = None,
+        on_message=None,
+        on_token=None,
     ):
-        return await self.direct_coding_agent(messages=messages, model=model, thread_id=thread_id)
+        return await self.direct_coding_agent(
+            messages=messages,
+            model=model,
+            thread_id=thread_id,
+            on_message=on_message,
+            on_token=on_token,
+        )

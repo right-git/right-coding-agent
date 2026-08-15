@@ -15,6 +15,8 @@ class Agents(LLMClient):
         messages: list[HumanMessage | AIMessage | ToolMessage],
         model: str,
         thread_id: str | None = None,
+        on_message=None,
+        on_token=None,
     ):
         # The agent's whole tool surface is the three meta tools: every other
         # capability is discovered through search_tools / get_tool and driven
@@ -29,6 +31,8 @@ class Agents(LLMClient):
             agent_input={"messages": messages},
             tools=tools,
             thread_id=thread_id,
+            on_message=on_message,
+            on_token=on_token,
             middlewares=[
                 # Runs first so screenshots captured by tools become a vision
                 # message before summarization ever touches the tool tail.

@@ -16,7 +16,7 @@ class ProcessUserTurnTests(unittest.IsolatedAsyncioTestCase):
         agents.right_coding_agent = AsyncMock(side_effect=RuntimeError("boom"))
 
         ui = Mock()
-        ui.loading.return_value = nullcontext()
+        ui.turn_stream.return_value = nullcontext()
 
         with patch("src.main.logger") as logger:
             updated_messages = await process_user_turn(
@@ -55,7 +55,7 @@ class ProcessUserTurnTests(unittest.IsolatedAsyncioTestCase):
         )
 
         ui = Mock()
-        ui.loading.return_value = nullcontext()
+        ui.turn_stream.return_value = nullcontext()
         ui.has_visible_output.return_value = False
 
         with patch("src.main.logger") as logger:
@@ -81,7 +81,7 @@ class ProcessUserTurnTests(unittest.IsolatedAsyncioTestCase):
         agents.right_coding_agent = AsyncMock(return_value={"messages": response_messages})
 
         ui = Mock()
-        ui.loading.return_value = nullcontext()
+        ui.turn_stream.return_value = nullcontext()
         ui.has_visible_output.return_value = True
 
         with patch("src.main.logger"):
@@ -127,7 +127,7 @@ class EmptyFinalResponseTests(unittest.TestCase):
 class EmptyResponseRetryTests(unittest.IsolatedAsyncioTestCase):
     def make_ui(self):
         ui = Mock()
-        ui.loading.return_value = nullcontext()
+        ui.turn_stream.return_value = nullcontext()
         ui.has_visible_output.return_value = True
         return ui
 
@@ -231,7 +231,7 @@ class UsageReportingTests(unittest.IsolatedAsyncioTestCase):
         agents.right_coding_agent = AsyncMock(return_value={"messages": response_messages})
 
         ui = Mock()
-        ui.loading.return_value = nullcontext()
+        ui.turn_stream.return_value = nullcontext()
         ui.has_visible_output.return_value = True
 
         info = ModelInfo(
@@ -276,7 +276,7 @@ class UsageReportingTests(unittest.IsolatedAsyncioTestCase):
         agents.right_coding_agent = AsyncMock(return_value={"messages": [HumanMessage("test"), AIMessage("done")]})
 
         ui = Mock()
-        ui.loading.return_value = nullcontext()
+        ui.turn_stream.return_value = nullcontext()
         ui.has_visible_output.return_value = True
 
         with patch("src.main.logger"):

@@ -1,5 +1,6 @@
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -113,6 +114,82 @@ class PortablePointerKeyTests(unittest.TestCase):
             self.pointer.hold_key("shift", 0.5)
 
         self.assertEqual(self.keyboard.events, [("press", Key.shift), ("release", Key.shift)])
+
+
+class FakeRun:
+    """Scripted stand-in for subprocess.run."""
+
+    def __init__(self, stdout="", returncode=0, stderr=""):
+        self.calls: list[list[str]] = []
+        self.stdout = stdout
+        self.returncode = returncode
+        self.stderr = stderr
+
+    def __call__(self, command, **kwargs):
+        self.calls.append(list(command))
+        result = unittest.mock.Mock()
+        result.stdout = self.stdout
+        result.stderr = self.stderr
+        result.returncode = self.returncode
+        return result
+
+
+class PortableFocusTests(unittest.TestCase):
+    def test_darwin_focus_runs_osascript_and_returns_the_title(self):
+        from src.llm.tools.computer.platforms.portable import focus
+
+        runner = FakeRun(stdout="My Editor — main.py\n")
+        window = focus.focus_window("Editor", platform="darwin", runner=runner)
+
+        self.assertEqual(window.title, "My Editor — main.py")
+        command = runner.calls[0]
+        self.assertEqual(command[0], "osascript")
+        self.assertEqual(command[-1], "Editor")
+
+    def test_darwin_focus_raises_when_nothing_matches(self):
+        from src.llm.tools.computer.platforms.portable import focus
+
+        runner = FakeRun(stdout="\n")
+        with self.assertRaisesRegex(LookupError, "no visible window"):
+            focus.focus_window("Nope", platform="darwin", runner=runner)
+
+    def test_darwin_focus_surfaces_osascript_failures(self):
+        from src.llm.tools.computer.platforms.portable import focus
+
+        runner = FakeRun(returncode=1, stderr="not allowed")
+        with self.assertRaisesRegex(OSError, "not allowed"):
+            focus.focus_window("Editor", platform="darwin", runner=runner)
+
+    def test_linux_focus_uses_wmctrl(self):
+        from src.llm.tools.computer.platforms.portable import focus
+
+        runner = FakeRun(stdout="")
+        with unittest.mock.patch.object(focus.shutil, "which", return_value="/usr/bin/wmctrl"):
+            window = focus.focus_window("Editor", platform="linux", runner=runner)
+
+        self.assertEqual(runner.calls[0], ["wmctrl", "-a", "Editor"])
+        self.assertEqual(window.title, "Editor")
+
+    def test_linux_focus_explains_missing_wmctrl(self):
+        from src.llm.tools.computer.platforms.portable import focus
+
+        with unittest.mock.patch.object(focus.shutil, "which", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "wmctrl"):
+                focus.focus_window("Editor", platform="linux", runner=FakeRun())
+
+    def test_unsupported_platform_raises(self):
+        from src.llm.tools.computer.platforms.portable import focus
+
+        with self.assertRaisesRegex(RuntimeError, "not supported"):
+            focus.focus_window("Editor", platform="haiku", runner=FakeRun())
+
+    def test_foreground_window_never_raises(self):
+        from src.llm.tools.computer.platforms.portable import focus
+
+        def exploding_runner(command, **kwargs):
+            raise OSError("no display")
+
+        self.assertIsNone(focus.foreground_window(platform="darwin", runner=exploding_runner))
 
 
 class FactoryTests(unittest.TestCase):

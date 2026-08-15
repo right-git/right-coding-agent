@@ -101,12 +101,18 @@ async def process_user_turn(
         len(base_messages),
     )
 
+    printed_ids: set[str] = set()
+
     try:
-        with ui.loading("thinking"):
+        with ui.turn_stream() as stream:
             response = await agents.right_coding_agent(
                 messages=working_messages,
                 model=model,
+                on_message=getattr(stream, "on_message", None),
+                on_token=getattr(stream, "on_token", None),
             )
+        if stream is not None:
+            printed_ids |= stream.printed_ids
         raw_messages = response["messages"]
 
         if is_empty_final_response(raw_messages):
@@ -120,11 +126,15 @@ async def process_user_turn(
                 *raw_messages[:-1],
                 HumanMessage(EMPTY_RESPONSE_NUDGE),
             ]
-            with ui.loading("thinking"):
+            with ui.turn_stream() as stream:
                 response = await agents.right_coding_agent(
                     messages=retry_messages,
                     model=model,
+                    on_message=getattr(stream, "on_message", None),
+                    on_token=getattr(stream, "on_token", None),
                 )
+            if stream is not None:
+                printed_ids |= stream.printed_ids
             raw_messages = response["messages"]
             if is_empty_final_response(raw_messages):
                 logger.warning(
@@ -174,7 +184,10 @@ async def process_user_turn(
             )
             return trimmed_messages
 
-        ui.print_response(new_messages)
+        if printed_ids:
+            ui.print_response(new_messages, skip_ids=printed_ids)
+        else:
+            ui.print_response(new_messages)
         await report_usage(
             ui=ui,
             catalog=catalog,

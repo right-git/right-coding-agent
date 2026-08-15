@@ -58,7 +58,7 @@ uv sync
 uv run python -m src.main
 ```
 
-The screen tools expect an X11 session; on Wayland, capture works through `mss`, input support varies by compositor. The clipboard needs `xclip` or `xsel` installed.
+The screen tools expect an X11 session; on Wayland, capture works through `mss`, input support varies by compositor. The clipboard needs `xclip` or `xsel`; window focus needs `wmctrl` (plus `xdotool` to read the active window title).
 
 ### macOS
 
@@ -107,7 +107,7 @@ bash lint.sh                                  # black + flake8
 | Mouse + keyboard (`screen_click`, `screen_type`, `screen_key`) | ✅ native (SendInput) | ✅ portable (pynput) | ✅ portable (pynput, X11) |
 | Screen capture | ✅ | ✅ (needs permission) | ✅ (X11 / Wayland via mss) |
 | Clipboard (copy / paste) | ✅ Win32 | ✅ | ✅ (xclip / xsel) |
-| Window focus (`focus_window`) | ✅ | ❌ not yet | ❌ not yet |
+| Window focus (`focus_window`) | ✅ | ✅ AppleScript | ✅ wmctrl |
 
 The OS backends live in `src/llm/tools/computer/platforms/` — native Win32 under `windows/`, a pynput/mss/pyperclip fallback under `portable/` — and are picked automatically at runtime.
 
@@ -124,6 +124,12 @@ the production agent, then compare the usage footers — see
 - `/models` — list models with their context window and $/M pricing (metadata from the public OpenRouter API);
 - `/model <name>` — switch models: exact or partial match over the curated list **and** the whole OpenRouter catalog, so any OpenRouter model id works;
 - `/log-level [name]`, `/clear`, `/help`, `/quit`.
+
+While a turn runs, the terminal shows live progress, Claude-Code-style: a
+stopwatch for the current phase (`thinking… 12s` / `running tools… 3s`), every
+tool call and its result printed the moment they happen (results carry their
+duration), a dim `✻ thought for Ns` line before each action, and a tail of the
+answer as it streams in.
 
 After every response a dim footer reports what the turn cost:
 

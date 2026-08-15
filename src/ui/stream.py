@@ -1,0 +1,117 @@
+"""Live progress of one agent turn: stopwatch, tool events, streamed text.
+
+`ChatUI.turn_stream()` opens one rich Live region pinned to the bottom of
+the terminal and yields a `TurnStream`. The LLM layer drives it with two
+callbacks while the turn runs: `on_token` accumulates the model's streamed
+text (a tail of it is shown live), `on_message` prints tool calls and tool
+results the moment they happen — plus a dim "thought for Ns" line before
+each action, so the wait is always attributed. Regular console prints
+surface above the live region, so finished lines scroll away naturally
+while the ticker stays pinned.
+"""
+
+import time
+
+from langchain_core.messages import AIMessage, ToolMessage
+from rich.text import Text
+
+from src.config.logging import logger
+from src.llm.utils import format_duration
+
+TICKER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+TEXT_TAIL_LINES = 6
+
+
+class TurnTicker:
+    """A labeled stopwatch; the display re-reads it on every refresh."""
+
+    def __init__(self, label: str = "thinking") -> None:
+        self.label = label
+        self.started = time.monotonic()
+
+    @property
+    def elapsed(self) -> float:
+        return time.monotonic() - self.started
+
+    def reset(self, label: str) -> None:
+        self.label = label
+        self.started = time.monotonic()
+
+
+class TurnStream:
+    """Receives turn events from the LLM layer and renders them live.
+
+    Also the Live renderable itself: rich re-renders `__rich_console__`
+    ~10 times per second, which is what animates the frames and the clock.
+    `printed_ids` collects the ids of messages already shown live, so the
+    final `print_response` can skip them instead of printing twice.
+    """
+
+    def __init__(self, ui) -> None:
+        self._ui = ui
+        self.ticker = TurnTicker()
+        self.printed_ids: set[str] = set()
+        self._seen: set[str] = set()
+        self._text = ""
+
+    def __rich_console__(self, console, options):
+        if self._text:
+            for line in self._text.strip().splitlines()[-TEXT_TAIL_LINES:]:
+                yield Text(f"  {line}", style="info", overflow="ellipsis", no_wrap=True)
+        frame = TICKER_FRAMES[int(time.monotonic() * 10) % len(TICKER_FRAMES)]
+        yield Text(
+            f"  {frame} {self.ticker.label}… {format_duration(self.ticker.elapsed)}",
+            style="info",
+        )
+
+    # Both callbacks swallow their own failures: rendering progress must
+    # never break a turn that the model is still executing.
+
+    def on_token(self, piece: str) -> None:
+        try:
+            self._text += piece
+        except Exception:
+            logger.exception("Failed to buffer streamed text")
+
+    def on_message(self, message) -> None:
+        try:
+            self._handle(message)
+        except Exception:
+            logger.exception("Failed to render a streamed message")
+
+    def _handle(self, message) -> None:
+        identifier = getattr(message, "id", None)
+        if identifier and identifier in self._seen:
+            return
+        if identifier:
+            self._seen.add(identifier)
+
+        if isinstance(message, ToolMessage):
+            took = self.ticker.elapsed if self.ticker.label == "running tools" else None
+            self._ui._print_tool_result(message, duration=took)
+            if identifier:
+                self.printed_ids.add(identifier)
+            self.ticker.reset("thinking")
+            return
+
+        if not isinstance(message, AIMessage):
+            return
+
+        if message.tool_calls:
+            self._announce_thought()
+            for tool_call in message.tool_calls:
+                self._ui._print_tool_call(tool_call)
+            if identifier:
+                self.printed_ids.add(identifier)
+            self._text = ""
+            self.ticker.reset("running tools")
+        else:
+            # The final answer: announce the thinking time and let the turn
+            # loop print the text itself once the response is complete.
+            self._announce_thought()
+            self.ticker.reset("finishing")
+
+    def _announce_thought(self) -> None:
+        if self.ticker.label != "thinking":
+            return
+        self._ui.console.print(f"  ✻ thought for {format_duration(self.ticker.elapsed)}", style="info")

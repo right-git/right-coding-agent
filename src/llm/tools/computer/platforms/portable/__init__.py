@@ -8,5 +8,6 @@ library's own error.
 
 OS prerequisites: on macOS grant the process Accessibility (input) and
 Screen Recording (capture) permissions; on Linux X11 is expected (on
-Wayland, capture works via mss/pipewire portals, input support varies).
+Wayland, capture works via mss/pipewire portals, input support varies) and
+window focus needs `wmctrl` (plus `xdotool` to read the active window).
 """

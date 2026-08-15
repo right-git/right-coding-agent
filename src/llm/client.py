@@ -1,11 +1,12 @@
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from langchain.agents import create_agent
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.types import Command
@@ -75,6 +76,11 @@ class LLMClient:
         if reasoning_effort is not None:
             client_kwargs["reasoning_effort"] = reasoning_effort
 
+        if provider.provider_name in ("openai", "azure_openai"):
+            # Without this, streamed turns report no usage_metadata and the
+            # usage footer goes blank.
+            client_kwargs["stream_usage"] = True
+
         if provider.provider_name == "azure_openai":
             if not provider.api_base:
                 raise ValueError("api_base is required for azure_openai provider")
@@ -123,6 +129,8 @@ class LLMClient:
         context_schema: type[Any] | None = None,
         context: Any | None = None,
         thread_id: str | None = None,
+        on_message: Callable[[Any], None] | None = None,
+        on_token: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         if not self.providers:
             raise RuntimeError("No LLM providers configured")
@@ -178,7 +186,10 @@ class LLMClient:
                     )
 
                     stage = "invoke_agent"
-                    response = await agent.ainvoke(input=agent_input, context=context, config=config)
+                    if on_message is None and on_token is None:
+                        response = await agent.ainvoke(input=agent_input, context=context, config=config)
+                    else:
+                        response = await self._stream_agent(agent, agent_input, context, config, on_message, on_token)
 
                     if thread_id:
                         self._agent_cache[thread_id] = agent
@@ -220,6 +231,59 @@ class LLMClient:
             raise last_error
 
         raise RuntimeError("All configured LLM providers failed") from last_error
+
+    @staticmethod
+    def _forward(callback: Callable[[Any], None], payload: Any) -> None:
+        """Deliver one stream event; a display failure must not kill the turn."""
+        try:
+            callback(payload)
+        except Exception:
+            logger.exception("Stream callback failed")
+
+    async def _stream_agent(
+        self,
+        agent: Any,
+        agent_input: dict[str, Any],
+        context: Any | None,
+        config: dict[str, Any] | None,
+        on_message: Callable[[Any], None] | None,
+        on_token: Callable[[str], None] | None,
+    ) -> dict[str, Any]:
+        """Run the agent while forwarding events as they happen.
+
+        `updates` chunks carry every newly produced message (tool calls and
+        tool results included) the moment a node finishes; `messages` chunks
+        carry the model's own tokens; the last `values` chunk is the same
+        final state `ainvoke` would have returned.
+        """
+        modes = ["updates", "values"] + (["messages"] if on_token else [])
+        response: dict[str, Any] | None = None
+
+        async for mode, chunk in agent.astream(input=agent_input, context=context, config=config, stream_mode=modes):
+            if mode == "values":
+                response = chunk
+            elif mode == "messages":
+                piece, metadata = chunk
+                if (metadata or {}).get("langgraph_node") != "model":
+                    continue  # e.g. the summarization middleware's own model call
+                if not isinstance(piece, AIMessageChunk):
+                    continue
+                # .text is a property; do NOT call it — the compat shim it
+                # returns is callable and calling it warns on every token.
+                text = str(piece.text)
+                if text:
+                    self._forward(on_token, text)
+            elif on_message is not None:
+                for node_update in (chunk or {}).values():
+                    if not isinstance(node_update, dict):
+                        continue
+                    for message in node_update.get("messages") or []:
+                        if isinstance(message, (AIMessage, ToolMessage)):
+                            self._forward(on_message, message)
+
+        if response is None:
+            raise RuntimeError("Agent stream ended without a final state")
+        return response
 
     async def resume_agent(
         self,

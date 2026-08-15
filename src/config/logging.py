@@ -1,7 +1,17 @@
 import sys
+import warnings
 from pathlib import Path
 
 from loguru import logger
+
+
+def _warning_to_log(message, category, filename, lineno, file=None, line=None) -> None:
+    """Send Python warnings to the log file instead of stderr.
+
+    The terminal belongs to the chat UI; a library warning printed mid-turn
+    lands on top of the live progress display.
+    """
+    logger.warning("{}:{} {}: {}", filename, lineno, category.__name__, message)
 
 
 class LoggingManager:
@@ -56,6 +66,7 @@ class LoggingManager:
             self.log_to_stdout = log_to_stdout
 
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
+        warnings.showwarning = _warning_to_log
 
         logger.remove()
 

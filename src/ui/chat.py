@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.spinner import Spinner
+from src.ui.stream import TurnStream
 from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
@@ -153,14 +153,15 @@ class ChatUI:
                 markup=False,
             )
 
-    def _print_tool_result(self, msg: ToolMessage) -> None:
+    def _print_tool_result(self, msg: ToolMessage, duration: float | None = None) -> None:
         content_str = str(msg.content)
         is_error = (
             msg.status == "error" or content_str.startswith("Error") or content_str.startswith("Tool call failed")
         )
         preview = scrub_text(" ".join(content_str.split()), 200)
+        suffix = f" · {format_duration(duration)}" if duration is not None else ""
         self.console.print(
-            f"  ⎿ {preview}",
+            f"  ⎿ {preview}{suffix}",
             style="error" if is_error else "info",
             markup=False,
             highlight=False,
@@ -218,8 +219,14 @@ class ChatUI:
                     return True
         return False
 
-    def print_response(self, messages: list[HumanMessage | AIMessage | ToolMessage]):
+    def print_response(
+        self,
+        messages: list[HumanMessage | AIMessage | ToolMessage],
+        skip_ids: set[str] | frozenset[str] = frozenset(),
+    ):
         for msg in messages:
+            if getattr(msg, "id", None) in skip_ids:
+                continue  # already shown live by the turn stream
             if isinstance(msg, AIMessage):
                 if msg.tool_calls:
                     for tc in msg.tool_calls:
@@ -275,11 +282,16 @@ class ChatUI:
         return {"decisions": decisions}
 
     @contextmanager
-    def loading(self, message: str = "thinking"):
-        """Show a spinner animation while awaiting a response."""
-        spinner = Spinner("dots", text=Text(f"  {message}...", style="info"))
-        with Live(spinner, console=self.console, refresh_per_second=10, transient=True):
-            yield
+    def turn_stream(self):
+        """Live view of one running turn: stopwatch, tool events, streamed text.
+
+        Yields a `TurnStream` whose `on_message`/`on_token` callbacks the LLM
+        layer drives; whatever it printed live is recorded in `printed_ids`
+        so `print_response` can skip it afterwards.
+        """
+        stream = TurnStream(self)
+        with Live(stream, console=self.console, refresh_per_second=10, transient=True):
+            yield stream
 
     def print_error(self, error: Exception):
         self.console.print(f"  error: {error}", style="error")
