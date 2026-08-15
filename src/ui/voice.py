@@ -137,17 +137,25 @@ class VoiceController:
             self._listener = HotkeyListener(self.key_spec, on_toggle=self.toggle)
 
     def _warm_up_asr(self) -> None:
+        set_status = getattr(self.ui, "set_model_status", None) or (lambda *_: None)
         try:
+            set_status("voice asr", "loading")
             self._transcriber.load()
+            set_status("voice asr", "ready")
             logger.info("Push-to-talk ASR model is warm")
         except Exception:
+            set_status("voice asr", "failed")
             logger.exception("ASR warm-up failed; the model will retry lazily")
 
     def _warm_up_tts(self) -> None:
+        set_status = getattr(self.ui, "set_model_status", None) or (lambda *_: None)
         try:
+            set_status("voice tts", "loading")
             self._speaker.load()
+            set_status("voice tts", "ready")
             logger.info("TTS model is warm")
         except Exception:
+            set_status("voice tts", "failed")
             logger.exception("TTS warm-up failed; the model will retry lazily")
 
     # ------------------------------------------------- push-to-talk (hotkey)

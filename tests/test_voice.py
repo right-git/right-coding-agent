@@ -494,6 +494,69 @@ class VoiceUiTests(unittest.TestCase):
             ui.notify_done()
             sound.assert_called_once()
 
+    def test_model_status_line_shows_loading_and_hides_stale_ready(self):
+        import time as time_module
+
+        from src.ui.chat import ChatUI
+
+        ui = ChatUI(model="m")
+        now = time_module.monotonic()
+        ui.model_status["vision"] = ("loading", now - 3)
+        ui.model_status["voice asr"] = ("ready", now)
+        ui.model_status["voice tts"] = ("ready", now - 60)  # давно готова — не показываем
+        ui.model_status["broken"] = ("failed", now - 60)  # провал висит, пока его видно
+
+        text = ui._model_status_text()
+
+        self.assertIn("⏳ vision 3s", text)
+        self.assertIn("✓ voice asr", text)
+        self.assertNotIn("voice tts", text)
+        self.assertIn("✗ broken", text)
+
+    def test_rprompt_combines_voice_and_model_status(self):
+        from src.ui.chat import ChatUI
+
+        ui = ChatUI(model="m")
+        ui.voice = SimpleNamespace(status=lambda: "🎙 2s")
+        ui.set_model_status("vision", "loading")
+
+        status = ui._rprompt_status()
+
+        self.assertIn("🎙 2s", status)
+        self.assertIn("⏳ vision", status)
+
+    def test_warm_up_reports_model_status(self):
+        statuses = []
+        controller = self.make_controller_with_ui(SimpleNamespace(set_model_status=lambda *args: statuses.append(args)))
+
+        controller._warm_up_asr()
+
+        self.assertEqual(statuses, [("voice asr", "loading"), ("voice asr", "ready")])
+
+    def make_controller_with_ui(self, ui):
+        from src.ui.voice import VoiceController
+
+        return VoiceController(
+            ui,
+            transcriber=WhisperTranscriber(loader=lambda: FakeWhisperModel([])),
+            speaker=FakeVoiceSpeaker(),
+            recorder=FakeVoiceRecorder(np.zeros(SAMPLE_RATE, dtype=np.float32)),
+            player=FakeVoicePlayer(),
+            listener=FakeHotkeyListener(),
+        )
+
+    def test_vision_preload_reports_model_status(self):
+        from unittest.mock import Mock
+
+        from src.main import preload_vision_model
+
+        ui = Mock()
+        with patch("src.llm.tools.warm_up_computer"):
+            preload_vision_model(ui)
+
+        ui.set_model_status.assert_any_call("vision", "loading")
+        ui.set_model_status.assert_called_with("vision", "ready")
+
     def test_voice_command_toggles_spoken_replies(self):
         from src.ui.chat import ChatUI
 

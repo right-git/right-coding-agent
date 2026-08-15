@@ -1,4 +1,5 @@
 import os
+import time
 from contextlib import contextmanager
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -48,6 +49,7 @@ class ChatUI:
         self.pending_images: list[dict] = []
         self.sound_enabled = True
         self.voice = None  # VoiceController once /voice enables it
+        self.model_status: dict[str, tuple[str, float]] = {}  # name → (state, monotonic when set)
         self.commands = CommandHandler(self)
 
     def set_model_catalog(self, catalog: dict[str, ModelInfo] | None) -> None:
@@ -61,13 +63,39 @@ class ChatUI:
                 completer=CommandCompleter(self),
                 complete_while_typing=True,
                 key_bindings=self._build_key_bindings(),
-                rprompt=self._voice_rprompt,
+                rprompt=self._rprompt_status,
+                # Auto-redraw keeps the loading/recording stopwatches ticking
+                # without any thread having to invalidate the app.
+                refresh_interval=0.5,
             )
         return self.prompt_session
 
-    def _voice_rprompt(self) -> str:
-        """Right-side prompt status while voice records or speaks."""
-        return self.voice.status() if self.voice is not None else ""
+    READY_LINGER_SECONDS = 5.0
+
+    def set_model_status(self, name: str, state: str) -> None:
+        """Report a model's loading state ("loading" / "ready" / "failed").
+
+        Called from loader threads; rendered live at the right of the prompt.
+        """
+        self.model_status[name] = (state, time.monotonic())
+
+    def _model_status_text(self) -> str:
+        parts = []
+        for name, (state, since) in list(self.model_status.items()):
+            elapsed = time.monotonic() - since
+            if state == "loading":
+                parts.append(f"⏳ {name} {elapsed:.0f}s")
+            elif state == "failed":
+                parts.append(f"✗ {name}")
+            elif state == "ready" and elapsed < self.READY_LINGER_SECONDS:
+                parts.append(f"✓ {name}")
+        return " · ".join(parts)
+
+    def _rprompt_status(self) -> str:
+        """Right-side prompt status: voice recording/speaking + model loading."""
+        voice = self.voice.status() if self.voice is not None else ""
+        models = self._model_status_text()
+        return " · ".join(part for part in (voice, models) if part)
 
     def _voice_welcome_line(self) -> str:
         if self.voice is not None:
@@ -176,7 +204,7 @@ class ChatUI:
         info.add_row("settings", self.settings_line())
         info.add_row("cwd", os.getcwd())
         info.add_row("logs", "logs.log")
-        info.add_row("vision", "nvidia/LocateAnything-3B · loads in background")
+        info.add_row("vision", "nvidia/LocateAnything-3B · progress shown right of the prompt")
         info.add_row("voice", self._voice_welcome_line())
         body = Group(
             Text("✻  Chattler.AI Open Source", style="bold magenta"),

@@ -25,19 +25,24 @@ EMPTY_RESPONSE_NUDGE = (
 )
 
 
-def preload_vision_model() -> None:
+def preload_vision_model(ui: ChatUI | None = None) -> None:
     """Load the LocateAnything vision model so the first screen query is fast.
 
     Runs in a worker thread at startup; a failure only costs the warm start,
-    the locator will retry lazily on first use.
+    the locator will retry lazily on first use. Progress is reported through
+    `ui.set_model_status`, shown live at the right of the prompt.
     """
+    set_status = getattr(ui, "set_model_status", None) or (lambda *_: None)
     try:
         from src.llm.tools import warm_up_computer
 
         logger.info("Preloading the vision locator model")
+        set_status("vision", "loading")
         warm_up_computer()
+        set_status("vision", "ready")
         logger.info("Vision locator model is ready")
     except Exception:
+        set_status("vision", "failed")
         logger.exception("Vision model preload failed")
 
 
@@ -274,7 +279,7 @@ async def main():
     # in-loop refresh below retries (rate-limited by the catalog's cooldown)
     # if this initial attempt failed.
     catalog_task = asyncio.create_task(load_catalog())
-    vision_task = asyncio.create_task(asyncio.to_thread(preload_vision_model))
+    vision_task = asyncio.create_task(asyncio.to_thread(preload_vision_model, ui))
 
     try:
         while True:
