@@ -139,8 +139,10 @@ character) anywhere, even with another window focused: recording starts and the
 prompt shows a live stopwatch with a draft of what you said. Press the key again —
 the utterance is transcribed locally (faster-whisper `large-v3-turbo`, incremental,
 so the text lands in well under a second regardless of how long you talked) and
-sent to the agent as a normal message. The ASR model warms up in the background at
-startup.
+sent to the agent as a normal message — with a `done.mp3` chime confirming the
+send, so you know the model is working even when the terminal is not visible
+(silence after the second press means nothing was recognized; the chime respects
+`/sound`). The ASR model warms up in the background at startup.
 
 **`/voice on` adds spoken replies**: the answer is spoken sentence-by-sentence
 (local Silero TTS, Russian voices; `VOICE_TTS_SPEAKER` selects the voice) while the

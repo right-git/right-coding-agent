@@ -400,10 +400,24 @@ class VoiceControllerTests(unittest.TestCase):
         self.assertTrue(controller._recording)
         self.assertTrue(controller._recorder.recording)
 
-        controller.toggle()
+        with patch("src.ui.sound.play_done_sound") as cue:
+            controller.toggle()
         self.assertFalse(controller._recording)
         self.assertEqual(controller.take_pending_text(), "привет мир")
         self.assertIsNone(controller.take_pending_text())
+        cue.assert_called_once()  # звук — подтверждение отправки из любого окна
+
+    def test_empty_transcript_is_not_submitted_and_stays_silent(self):
+        controller = self.make_controller()
+        controller._transcriber = WhisperTranscriber(loader=lambda: FakeWhisperModel([[]]))
+        controller.started = True
+
+        controller.toggle()
+        with patch("src.ui.sound.play_done_sound") as cue:
+            controller.toggle()
+
+        self.assertIsNone(controller.take_pending_text())
+        cue.assert_not_called()
 
     def test_streamed_tokens_become_queued_sentences(self):
         controller = self.make_controller()

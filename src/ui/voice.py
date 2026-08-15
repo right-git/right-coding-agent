@@ -200,6 +200,7 @@ class VoiceController:
         self._invalidate()
         if text:
             self._submit(text)
+            self._play_sent_cue()
 
     # --------------------------------------------------- transcript delivery
 
@@ -221,6 +222,22 @@ class VoiceController:
             self._set_pending(text)
 
         self._loop.call_soon_threadsafe(push)
+
+    def _play_sent_cue(self) -> None:
+        """Audible confirmation that the utterance went off to the model.
+
+        Push-to-talk works with any window focused, so the terminal may not
+        be visible — without the cue the user cannot tell a sent message from
+        a failed transcription. Respects the /sound toggle.
+        """
+        if not getattr(self.ui, "sound_enabled", True):
+            return
+        try:
+            from src.ui.sound import play_done_sound
+
+            play_done_sound()
+        except Exception:
+            logger.exception("Send-confirmation sound failed")
 
     def _set_pending(self, text: str) -> None:
         with self._pending_lock:
