@@ -21,6 +21,7 @@ COMMANDS: dict[str, str] = {
     "/temperature": "sampling temperature",
     "/paste": "attach a clipboard image",
     "/sound": "toggle the completion sound",
+    "/voice": "voice mode (push-to-talk + TTS)",
     "/log-level": "show or change log level",
     "/clear": "clear screen and history",
     "/quit": "exit",
@@ -61,7 +62,7 @@ class CommandCompleter(Completer):
         if command in ("/temperature", "/temp"):
             yield from self._option_completions(word, ("none",))
             return
-        if command == "/sound":
+        if command in ("/sound", "/voice"):
             yield from self._option_completions(word, ("on", "off"))
             return
         if command in ("/log-level", "/loglevel"):

@@ -353,17 +353,31 @@ class OverlayHelperTests(unittest.TestCase):
         self.assertEqual(connector_corner((400, 10), (100, 100), (50, 40)), (150, 100))
         self.assertEqual(connector_corner((400, 400), (100, 100), (50, 40)), (150, 140))
 
-    def test_click_through_adds_the_transparent_window_styles(self):
+    def test_click_through_styles_land_on_the_toplevel_window(self):
+        # winfo_id() is Tk's inner client window; layering IT would blank the
+        # screen, so the styles must go to the GetAncestor(GA_ROOT) handle.
         user32 = Mock()
+        user32.GetAncestor.return_value = 5555
         user32.GetWindowLongW.return_value = 0x1
 
         enable_click_through(4242, user32=user32)
 
-        user32.GetWindowLongW.assert_called_once_with(4242, -20)
-        _, styles = user32.SetWindowLongW.call_args.args[1:]
+        user32.GetAncestor.assert_called_once_with(4242, 2)
+        user32.GetWindowLongW.assert_called_once_with(5555, -20)
+        handle, _, styles = user32.SetWindowLongW.call_args.args
+        self.assertEqual(handle, 5555)
         self.assertTrue(styles & 0x00000020)
         self.assertTrue(styles & 0x00080000)
         self.assertTrue(styles & 0x1)
+
+    def test_click_through_falls_back_to_the_given_handle(self):
+        user32 = Mock()
+        user32.GetAncestor.return_value = 0  # resolution failed
+        user32.GetWindowLongW.return_value = 0
+
+        enable_click_through(4242, user32=user32)
+
+        user32.GetWindowLongW.assert_called_once_with(4242, -20)
 
     def test_null_overlay_records_markers(self):
         overlay = NullOverlay()

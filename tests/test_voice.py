@@ -1,10 +1,16 @@
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from src.config.prompts import Prompts
+from src.voice import (
+    SpeakableFilter,
+)
 from src.voice import (
     AudioPlayer,
     HotkeyListener,
@@ -296,6 +302,196 @@ class AudioPlayerTests(unittest.TestCase):
 
         self.assertFalse(finished)
         self.assertEqual(len(stream.blocks), 1)
+
+
+class SpeakableFilterTests(unittest.TestCase):
+    def test_inline_markdown_becomes_plain_text(self):
+        cleaner = SpeakableFilter()
+
+        self.assertEqual(cleaner.filter("Запусти `lint.sh` — **важно**."), "Запусти lint.sh — важно.")
+        self.assertEqual(cleaner.filter("Смотри [доку](https://a.b)."), "Смотри доку.")
+
+    def test_fenced_code_is_never_spoken(self):
+        cleaner = SpeakableFilter()
+
+        self.assertEqual(cleaner.filter("Вот код: ```python"), "Вот код:")
+        self.assertEqual(cleaner.filter("x = 1."), "")  # внутри fence
+        self.assertEqual(cleaner.filter("``` Готово."), "Готово.")
+
+
+class VoicePromptTests(unittest.TestCase):
+    def test_voice_mode_appends_tts_instructions(self):
+        base = Prompts.coding_system(False)
+        voiced = Prompts.coding_system(True)
+
+        self.assertTrue(voiced.startswith(base))
+        self.assertIn("text-to-speech", voiced)
+        self.assertNotIn("text-to-speech", base)
+
+
+class FakeHotkeyListener:
+    def __init__(self):
+        self.started = False
+        self.key_spec = "f8"
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.started = False
+
+
+class FakeVoiceRecorder:
+    def __init__(self, audio):
+        self.audio = audio
+        self.recording = False
+
+    def start(self):
+        self.recording = True
+
+    def snapshot(self):
+        return self.audio
+
+    def stop(self):
+        self.recording = False
+        return self.audio
+
+
+class FakeVoiceSpeaker:
+    def load(self):
+        return self
+
+    def synthesize(self, text):
+        return np.zeros(10, dtype=np.float32), 24_000
+
+
+class FakeVoicePlayer:
+    def __init__(self):
+        self.stopped = False
+
+    def play(self, audio, rate):
+        return True
+
+    def stop(self):
+        self.stopped = True
+
+
+class VoiceControllerTests(unittest.TestCase):
+    def make_controller(self, text="привет мир"):
+        from src.ui.voice import VoiceController
+
+        model = FakeWhisperModel([[FakeSegment(text, 2.0)]])
+        return VoiceController(
+            SimpleNamespace(prompt_session=None),
+            transcriber=WhisperTranscriber(loader=lambda: model),
+            speaker=FakeVoiceSpeaker(),
+            recorder=FakeVoiceRecorder(np.zeros(3 * SAMPLE_RATE, dtype=np.float32)),
+            player=FakeVoicePlayer(),
+            listener=FakeHotkeyListener(),
+            step_interval=999,
+        )
+
+    def test_toggle_records_then_submits_the_transcript(self):
+        controller = self.make_controller()
+        controller.start_input()
+        self.addCleanup(controller.shutdown)
+
+        controller.toggle()
+        self.assertTrue(controller._recording)
+        self.assertTrue(controller._recorder.recording)
+
+        controller.toggle()
+        self.assertFalse(controller._recording)
+        self.assertEqual(controller.take_pending_text(), "привет мир")
+        self.assertIsNone(controller.take_pending_text())
+
+    def test_streamed_tokens_become_queued_sentences(self):
+        controller = self.make_controller()
+        controller.speak_replies = True  # без start_input(): очередь не разбирается воркером
+
+        wrap = controller.wrap_on_token(None)
+        wrap("Привет")
+        wrap(" мир. Хвост")
+        controller.finish_turn()
+
+        self.assertEqual(controller._sentences.get_nowait(), "Привет мир.")
+        self.assertEqual(controller._sentences.get_nowait(), "Хвост")
+        self.assertTrue(controller._sentences.empty())
+
+    def test_code_fences_are_not_queued_for_speech(self):
+        controller = self.make_controller()
+        controller.speak_replies = True
+
+        controller.wrap_on_token(None)("Смотри. ```py x = 1. ``` Готово. ")
+        controller.finish_turn()
+
+        self.assertEqual(controller._sentences.get_nowait(), "Смотри.")
+        self.assertEqual(controller._sentences.get_nowait(), "Готово.")
+        self.assertTrue(controller._sentences.empty())
+
+    def test_toggle_barges_in_on_running_speech(self):
+        controller = self.make_controller()
+        controller.started = True
+        controller._sentences.put("недоговорённое")
+
+        controller.toggle()
+        self.addCleanup(controller.shutdown)
+
+        self.assertTrue(controller._recording)
+        self.assertTrue(controller._sentences.empty())
+        self.assertTrue(controller._player.stopped)
+
+    def test_not_started_controller_ignores_tokens_and_toggles(self):
+        controller = self.make_controller()
+
+        controller.feed_token("Привет. ")
+        controller.toggle()
+
+        self.assertTrue(controller._sentences.empty())
+        self.assertFalse(controller._recording)
+
+    def test_voice_off_mutes_replies_but_keeps_push_to_talk(self):
+        controller = self.make_controller()
+        controller.started = True
+        controller.speak_replies = True
+        controller.wrap_on_token(None)("Раз. ")
+        self.assertEqual(controller._sentences.get_nowait(), "Раз.")
+
+        controller.set_speaking(False)
+        controller.wrap_on_token(None)("Два. ")
+
+        self.assertTrue(controller._sentences.empty())
+        controller.toggle()  # push-to-talk всё ещё работает
+        self.addCleanup(controller.shutdown)
+        self.assertTrue(controller._recording)
+
+
+class VoiceUiTests(unittest.TestCase):
+    def test_notify_done_is_silent_in_voice_mode(self):
+        from src.ui.chat import ChatUI
+
+        ui = ChatUI(model="m")
+        with patch("src.ui.chat.play_done_sound") as sound:
+            ui.voice = SimpleNamespace(speak_replies=True, status=lambda: "")
+            ui.notify_done()
+            sound.assert_not_called()
+
+            ui.voice = None
+            ui.notify_done()
+            sound.assert_called_once()
+
+    def test_voice_command_toggles_spoken_replies(self):
+        from src.ui.chat import ChatUI
+
+        ui = ChatUI(model="m")
+        with patch.object(ChatUI, "set_voice_replies") as replies:
+            ui.handle_command("/voice")
+        replies.assert_called_once_with(True)
+
+        ui.voice = SimpleNamespace(speak_replies=True, key_spec="alt_r")
+        with patch.object(ChatUI, "set_voice_replies") as replies:
+            ui.handle_command("/voice")
+        replies.assert_called_once_with(False)
 
 
 if __name__ == "__main__":

@@ -54,6 +54,8 @@ class CommandHandler:
             return self._paste_image()
         if command == "/sound":
             return self._toggle_sound(argument)
+        if command == "/voice":
+            return self._toggle_voice(argument)
         if command in ("/log-level", "/loglevel"):
             return self._switch_log_level(argument) if argument else self._print_log_level()
         if command == "/clear":
@@ -76,6 +78,7 @@ class CommandHandler:
             ("/temperature [value]", "sampling temperature 0..2, or none"),
             ("/paste", "attach an image from the clipboard (also Ctrl+V in many terminals)"),
             ("/sound [on|off]", "toggle the completion sound"),
+            ("/voice [on|off]", "spoken replies on/off (push-to-talk is always on)"),
             ("/log-level [name]", "show or change the log level"),
             ("/clear", "clear screen and history"),
             ("/quit", "exit"),
@@ -328,6 +331,25 @@ class CommandHandler:
             self.ui.sound_enabled = not self.ui.sound_enabled
         state = "on" if self.ui.sound_enabled else "off"
         self.console.print(f"  completion sound {state}", style="success")
+        return None
+
+    def _toggle_voice(self, argument: str) -> None:
+        value = argument.lower()
+        if value not in ("", "on", "off"):
+            self.console.print(f"  invalid value: {argument} (use /voice, /voice on, or /voice off)", style="error")
+            return None
+        turn_on = value == "on" or (not value and not self.ui.voice_active)
+        try:
+            self.ui.set_voice_replies(turn_on)
+            if turn_on:
+                self.console.print(
+                    "  spoken replies on — the agent answers with voice " "(the TTS model warms up in the background)",
+                    style="success",
+                )
+            else:
+                self.console.print("  spoken replies off — push-to-talk stays active", style="success")
+        except Exception as error:
+            self.console.print(f"  voice mode failed: {error}", style="error")
         return None
 
     # -------------------------------------------------------------- logging

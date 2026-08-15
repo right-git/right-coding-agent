@@ -47,6 +47,7 @@ class ChatUI:
         self.temperature: float | None = None
         self.pending_images: list[dict] = []
         self.sound_enabled = True
+        self.voice = None  # VoiceController once /voice enables it
         self.commands = CommandHandler(self)
 
     def set_model_catalog(self, catalog: dict[str, ModelInfo] | None) -> None:
@@ -60,8 +61,50 @@ class ChatUI:
                 completer=CommandCompleter(self),
                 complete_while_typing=True,
                 key_bindings=self._build_key_bindings(),
+                rprompt=self._voice_rprompt,
             )
         return self.prompt_session
+
+    def _voice_rprompt(self) -> str:
+        """Right-side prompt status while voice records or speaks."""
+        return self.voice.status() if self.voice is not None else ""
+
+    def _voice_welcome_line(self) -> str:
+        if self.voice is not None:
+            key = self.voice.key_spec
+        else:
+            try:
+                from src.config.settings import settings
+
+                key = settings.voice_ptt_key
+            except Exception:
+                key = "alt_r"
+        replies = "on" if self.voice_active else "off"
+        return f"push-to-talk {key} · spoken replies {replies} (/voice)"
+
+    @property
+    def voice_active(self) -> bool:
+        """True when the agent answers aloud (drives the TTS prompt suffix)."""
+        return self.voice is not None and self.voice.speak_replies
+
+    def start_voice_input(self) -> None:
+        """Start always-on push-to-talk; called once at REPL startup."""
+        if self.voice is None:
+            from src.ui.voice import VoiceController
+
+            self.voice = VoiceController(self)
+        self.voice.start_input()
+
+    def set_voice_replies(self, on: bool) -> None:
+        """`/voice on|off`: whether replies are spoken; push-to-talk stays on."""
+        if self.voice is None:
+            self.start_voice_input()  # retry input too if startup failed
+        self.voice.set_speaking(on)
+
+    def finish_voice_turn(self) -> None:
+        """Flush the spoken tail of a finished turn; safe to call anytime."""
+        if self.voice is not None:
+            self.voice.finish_turn()
 
     def _build_key_bindings(self) -> KeyBindings:
         bindings = KeyBindings()
@@ -134,6 +177,7 @@ class ChatUI:
         info.add_row("cwd", os.getcwd())
         info.add_row("logs", "logs.log")
         info.add_row("vision", "nvidia/LocateAnything-3B · loads in background")
+        info.add_row("voice", self._voice_welcome_line())
         body = Group(
             Text("✻  Chattler.AI Open Source", style="bold magenta"),
             Text(""),
@@ -154,6 +198,13 @@ class ChatUI:
         self.console.print()
 
     async def get_input(self) -> str:
+        if self.voice is not None:
+            pending = self.voice.take_pending_text()
+            if pending:
+                # A transcript that finished while no prompt was up; echo it
+                # the way typed input would look and use it as the message.
+                self.console.print(f"> {pending}", style="user.prompt", markup=False, highlight=False)
+                return pending
         try:
             return await self._get_prompt_session().prompt_async("> ")
         except (EOFError, KeyboardInterrupt):
@@ -340,7 +391,9 @@ class ChatUI:
             yield stream
 
     def notify_done(self) -> None:
-        """Play the completion sound, when enabled."""
+        """Play the completion sound, when enabled; in voice mode speech is the signal."""
+        if self.voice_active:
+            return
         if self.sound_enabled:
             play_done_sound()
 

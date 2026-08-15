@@ -17,6 +17,7 @@ class Agents(LLMClient):
         thread_id: str | None = None,
         reasoning_effort: str | None = None,
         temperature: float | None = None,
+        voice_mode: bool = False,
         on_message=None,
         on_token=None,
     ):
@@ -28,7 +29,7 @@ class Agents(LLMClient):
         ]
 
         response = await self.ask_agent(
-            system_prompt=Prompts.right_coding_agent_sys,
+            system_prompt=Prompts.coding_system(voice_mode),
             model_name=model,
             agent_input={"messages": messages},
             tools=tools,

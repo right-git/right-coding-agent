@@ -128,7 +128,30 @@ the production agent, then compare the usage footers — see
 - `/temperature <0..2|none>` (alias `/temp`) — show or change the sampling temperature;
 - `/paste` — attach an image from the clipboard to your next message (a screenshot, a copied picture, or a copied image file); in terminals that forward the key, plain **Ctrl+V** in the input does the same and inserts an `[image N]` placeholder;
 - `/sound [on|off]` — toggle the completion sound played when a turn finishes (`assets/sounds/done.mp3`);
+- `/voice [on|off]` — whether the agent speaks its replies (push-to-talk input is always on);
 - `/log-level [name]`, `/clear`, `/help`, `/quit`.
+
+### Voice
+
+**Push-to-talk is always on.** Press **right Alt** (configurable via
+`VOICE_PTT_KEY` in `.env` — any pynput key name such as `f8`, or a single
+character) anywhere, even with another window focused: recording starts and the
+prompt shows a live stopwatch with a draft of what you said. Press the key again —
+the utterance is transcribed locally (faster-whisper `large-v3-turbo`, incremental,
+so the text lands in well under a second regardless of how long you talked) and
+sent to the agent as a normal message. The ASR model warms up in the background at
+startup.
+
+**`/voice on` adds spoken replies**: the answer is spoken sentence-by-sentence
+(local Silero TTS, Russian voices; `VOICE_TTS_SPEAKER` selects the voice) while the
+model is still streaming, and the system prompt switches to a "plain speakable
+prose, no markdown, never read code aloud" mode. Pressing the push-to-talk key
+while the agent is speaking interrupts the speech and starts a new recording
+(barge-in). `/voice off` mutes the replies; push-to-talk keeps working. Models
+download on first use into `models/` (whisper ≈1.6 GB, Silero ≈38 MB). Cloud
+ASR/TTS providers (Fish Audio, ElevenLabs) are planned behind the same provider
+interface — `FISH_AUDIO_API_KEY` / `ELEVENLABS_API_KEY` are already reserved in
+settings.
 
 Commands autocomplete as you type: `/` suggests command names, `/model ` suggests tool-capable model ids straight from the catalog (with ctx/price shown), `/effort` its levels, `/log-level` its levels.
 

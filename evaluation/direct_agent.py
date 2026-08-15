@@ -9,6 +9,7 @@ the three meta tools.
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain.agents.middleware import SummarizationMiddleware
 
+from src.config.prompts import Prompts
 from src.llm.agents import Agents
 from src.llm.middlewares import AttachedImagesMiddleware, MessageLogMiddleware
 
@@ -33,12 +34,13 @@ class DirectAgents(Agents):
         thread_id: str | None = None,
         reasoning_effort: str | None = None,
         temperature: float | None = None,
+        voice_mode: bool = False,
         on_message=None,
         on_token=None,
     ):
         # Mirrors Agents.right_coding_agent so only the tool wiring differs.
         return await self.ask_agent(
-            system_prompt=DIRECT_CODING_AGENT_SYS,
+            system_prompt=DIRECT_CODING_AGENT_SYS + (Prompts.voice_mode_suffix if voice_mode else ""),
             model_name=model,
             agent_input={"messages": messages},
             tools=[*DIRECT_TOOLS],
@@ -70,6 +72,7 @@ class DirectAgents(Agents):
         thread_id: str | None = None,
         reasoning_effort: str | None = None,
         temperature: float | None = None,
+        voice_mode: bool = False,
         on_message=None,
         on_token=None,
     ):
@@ -79,6 +82,7 @@ class DirectAgents(Agents):
             thread_id=thread_id,
             reasoning_effort=reasoning_effort,
             temperature=temperature,
+            voice_mode=voice_mode,
             on_message=on_message,
             on_token=on_token,
         )

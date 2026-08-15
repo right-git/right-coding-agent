@@ -4,6 +4,9 @@ import re
 from pathlib import Path
 
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?…])\s+")
+_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+_INLINE_CODE = re.compile(r"`([^`]*)`")
+_MARKUP = re.compile(r"[*_#>|~]+")
 
 
 def default_models_dir() -> Path:
@@ -33,3 +36,35 @@ class SentenceBuffer:
     def flush(self) -> str:
         tail, self._buffer = self._buffer.strip(), ""
         return tail
+
+
+class SpeakableFilter:
+    """Turns markdown-ish streamed sentences into speakable plain text.
+
+    Stateful across sentences on purpose: everything inside ``` fences is
+    dropped entirely, even when a fence spans many sentences — code must
+    never be read aloud. Inline backticks, emphasis marks, headers, and
+    links are reduced to their readable text.
+    """
+
+    def __init__(self) -> None:
+        self._in_code = False
+
+    def filter(self, sentence: str) -> str:
+        parts = sentence.split("```")
+        if len(parts) == 1:
+            kept = "" if self._in_code else sentence
+        else:
+            spoken = []
+            inside = self._in_code
+            for index, part in enumerate(parts):
+                if not inside:
+                    spoken.append(part)
+                if index < len(parts) - 1:  # a fence marker sits between parts
+                    inside = not inside
+            self._in_code = inside
+            kept = " ".join(spoken)
+        kept = _LINK.sub(r"\1", kept)
+        kept = _INLINE_CODE.sub(r"\1", kept)
+        kept = _MARKUP.sub("", kept)
+        return re.sub(r"\s+", " ", kept).strip()

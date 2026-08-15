@@ -11,6 +11,7 @@ from .detection import box_center
 from .types import Marker, Point, Size
 
 GWL_EXSTYLE = -20
+GA_ROOT = 2
 WS_EX_LAYERED = 0x00080000
 WS_EX_TRANSPARENT = 0x00000020
 WS_EX_TOOLWINDOW = 0x00000080
@@ -85,16 +86,28 @@ def connector_corner(anchor: Point, position: Point, tooltip_size: Size) -> Poin
 
 
 def enable_click_through(window_handle: int, *, user32=None) -> None:
-    """Let mouse events pass through the overlay to the app underneath."""
+    """Let mouse events pass through the overlay to the app underneath.
+
+    The styles must land on the TOP-LEVEL window: Tk's `winfo_id()` names the
+    inner client window, and marking that one WS_EX_LAYERED (with no layered
+    attributes ever set for it) stops it rendering entirely — the overlay
+    covers the desktop as a black screen. The toplevel already carries the
+    layered attributes from Tk's `-transparentcolor`, so adding the
+    click-through bits there is safe.
+    """
     library = user32
     if library is None:
         if sys.platform != "win32":
             return
         library = ctypes.windll.user32
 
-    styles = library.GetWindowLongW(window_handle, GWL_EXSTYLE)
+    try:
+        handle = library.GetAncestor(window_handle, GA_ROOT) or window_handle
+    except AttributeError:
+        handle = window_handle
+    styles = library.GetWindowLongW(handle, GWL_EXSTYLE)
     library.SetWindowLongW(
-        window_handle,
+        handle,
         GWL_EXSTYLE,
         styles | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
     )

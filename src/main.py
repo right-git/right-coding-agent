@@ -80,6 +80,16 @@ async def report_usage(
         logger.exception("Failed to report token usage for model [{}]", model)
 
 
+def turn_callbacks(ui: ChatUI, stream) -> tuple:
+    """The turn's (on_message, on_token) pair; tees tokens into TTS in voice mode."""
+    on_message = getattr(stream, "on_message", None)
+    on_token = getattr(stream, "on_token", None)
+    voice = getattr(ui, "voice", None)
+    if voice is not None and voice.speak_replies:
+        on_token = voice.wrap_on_token(on_token)
+    return on_message, on_token
+
+
 async def process_user_turn(
     *,
     agents,
@@ -93,6 +103,7 @@ async def process_user_turn(
     temperature: float | None = None,
 ) -> list[HumanMessage | AIMessage | ToolMessage]:
     started = time.perf_counter()
+    voice_mode = getattr(ui, "voice_active", False)
     base_messages = trim_incomplete_tool_calls(messages)
     working_messages = [*base_messages, HumanMessage(user_content)]
     shown_count = len(working_messages)
@@ -108,13 +119,15 @@ async def process_user_turn(
 
     try:
         with ui.turn_stream() as stream:
+            on_message, on_token = turn_callbacks(ui, stream)
             response = await agents.right_coding_agent(
                 messages=working_messages,
                 model=model,
                 reasoning_effort=reasoning_effort,
                 temperature=temperature,
-                on_message=getattr(stream, "on_message", None),
-                on_token=getattr(stream, "on_token", None),
+                voice_mode=voice_mode,
+                on_message=on_message,
+                on_token=on_token,
             )
         if stream is not None:
             printed_ids |= stream.printed_ids
@@ -132,13 +145,15 @@ async def process_user_turn(
                 HumanMessage(EMPTY_RESPONSE_NUDGE),
             ]
             with ui.turn_stream() as stream:
+                on_message, on_token = turn_callbacks(ui, stream)
                 response = await agents.right_coding_agent(
                     messages=retry_messages,
                     model=model,
                     reasoning_effort=reasoning_effort,
                     temperature=temperature,
-                    on_message=getattr(stream, "on_message", None),
-                    on_token=getattr(stream, "on_token", None),
+                    voice_mode=voice_mode,
+                    on_message=on_message,
+                    on_token=on_token,
                 )
             if stream is not None:
                 printed_ids |= stream.printed_ids
@@ -189,6 +204,7 @@ async def process_user_turn(
                 previous_ids=previous_ids,
                 duration=time.perf_counter() - started,
             )
+            ui.finish_voice_turn()
             ui.notify_done()
             return finalize_turn_history(trimmed_messages)
 
@@ -205,6 +221,7 @@ async def process_user_turn(
             previous_ids=previous_ids,
             duration=time.perf_counter() - started,
         )
+        ui.finish_voice_turn()
         ui.notify_done()
         return finalize_turn_history(trimmed_messages)
     except Exception as e:
@@ -213,6 +230,7 @@ async def process_user_turn(
             model,
             len(user_content),
         )
+        ui.finish_voice_turn()
         ui.print_error(e)
         return base_messages
 
@@ -240,6 +258,13 @@ async def main():
     messages = []
     model = available_models[0]
     ui = ChatUI(model=model, available_models=available_models)
+    try:
+        # Push-to-talk is always on: the hotkey works from the first prompt,
+        # /voice only toggles whether replies are spoken.
+        ui.start_voice_input()
+    except Exception:
+        logger.exception("Push-to-talk startup failed")
+        ui.print_warning("push-to-talk unavailable (see logs.log)")
     ui.print_welcome()
 
     async def load_catalog() -> None:

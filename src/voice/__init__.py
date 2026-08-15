@@ -15,7 +15,7 @@ from .providers import PLANNED_PROVIDERS, build_speaker, build_transcriber
 from .providers.silero import SPEAKERS, SileroSpeaker
 from .providers.whisper import WhisperSession, WhisperTranscriber
 from .types import Speaker, Transcriber, TranscriptionSession, VoiceProvider
-from .utils import SentenceBuffer, default_models_dir
+from .utils import SentenceBuffer, SpeakableFilter, default_models_dir
 
 __all__ = [
     "AudioPlayer",
@@ -25,6 +25,7 @@ __all__ = [
     "SPEAKERS",
     "SentenceBuffer",
     "SileroSpeaker",
+    "SpeakableFilter",
     "Speaker",
     "Transcriber",
     "TranscriptionSession",
