@@ -74,18 +74,19 @@ async def edit_file(file_path: str, old_string: str, new_string: str, replace_al
 
 
 @tool(parse_docstring=True, return_direct=False)
-async def glob_files(pattern: str, path: str = ".") -> str:
+async def glob_files(pattern: str, path: str = ".", max_results: int = 200) -> str:
     """Find files matching a glob pattern.
 
     Args:
         pattern: Glob pattern, for example `**/*.py` or `src/**/test_*.py`.
         path: Base directory to search from (default is the project root).
+        max_results: Maximum number of file paths to return (default 200).
 
     Returns:
         Matching paths sorted alphabetically, one per line, or an error message.
     """
     try:
-        return await asyncio.to_thread(_service.glob, pattern, path)
+        return await asyncio.to_thread(_service.glob, pattern, path, max_results)
     except Exception as error:
         return f"Tool call failed, error: {error}"
 

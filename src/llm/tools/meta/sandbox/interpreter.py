@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import textwrap
 from typing import Any, Callable, Awaitable
 
 from .builtins import make_builtins
@@ -66,8 +67,9 @@ class Interpreter:
         self.total_sleep = 0.0
         self.logs = []
 
-        # Wrap in a function so top-level `return` is valid (LLMs love writing it)
-        indented = "\n".join("    " + line for line in code.splitlines())
+        # Normalize tabs, indentation and wrap in a function so top-level `return` is valid
+        clean_code = textwrap.dedent(code.expandtabs(4)).strip()
+        indented = "\n".join("    " + line if line.strip() else "" for line in clean_code.splitlines())
         wrapped = f"def __sandbox_main__():\n{indented}\n"
         try:
             outer = ast.parse(wrapped, mode="exec")

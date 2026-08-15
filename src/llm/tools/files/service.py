@@ -59,14 +59,14 @@ class FileService:
         path.write_text(text.replace(old_string, new_string, -1 if replace_all else 1), encoding="utf-8")
         return f"Replaced {occurrences if replace_all else 1} occurrence(s) in {path}"
 
-    def glob(self, pattern: str, path: str = ".") -> str:
+    def glob(self, pattern: str, path: str = ".", max_results: int = MAX_GLOB_RESULTS) -> str:
         base = Path(path)
-        matches = sorted(str(match) for match in base.glob(pattern) if not _skipped(match))
+        matches = sorted(match.as_posix() for match in base.glob(pattern) if not _skipped(match))
         if not matches:
-            return f"No files match {pattern!r} under {base.resolve()}"
-        listing = "\n".join(matches[:MAX_GLOB_RESULTS])
-        if len(matches) > MAX_GLOB_RESULTS:
-            listing += f"\n… [+{len(matches) - MAX_GLOB_RESULTS} more]"
+            return f"No files match {pattern!r} under {base.resolve().as_posix()}"
+        listing = "\n".join(matches[:max_results])
+        if len(matches) > max_results:
+            listing += f"\n… [+{len(matches) - max_results} more]"
         return listing
 
     def grep(
@@ -95,13 +95,14 @@ class FileService:
             hits = [index for index, line in enumerate(lines) if regex.search(line)]
             if not hits:
                 continue
-            matched_files.append((str(candidate), len(hits)))
+            posix_path = candidate.as_posix()
+            matched_files.append((posix_path, len(hits)))
             if output_mode == "content":
                 for hit in hits:
                     low = max(0, hit - context)
                     high = min(len(lines), hit + context + 1)
                     for index in range(low, high):
-                        content_lines.append(f"{candidate}:{index + 1}:{lines[index][:MAX_LINE_CHARS]}")
+                        content_lines.append(f"{posix_path}:{index + 1}:{lines[index][:MAX_LINE_CHARS]}")
             if len(matched_files) >= MAX_GREP_RESULTS or len(content_lines) >= MAX_GREP_RESULTS:
                 break
 

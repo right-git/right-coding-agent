@@ -89,9 +89,18 @@ class GlobAndGrepTests(FileServiceTestCase):
 
         result = self.service.glob("**/*.py", str(self.root))
 
-        self.assertIn("a.py", result)
-        self.assertIn("b.py", result)
+        self.assertIn("src/a.py", result)
+        self.assertIn("src/deep/b.py", result)
         self.assertNotIn("readme.md", result)
+
+    def test_glob_supports_custom_max_results(self):
+        self.make("f1.py", "")
+        self.make("f2.py", "")
+        self.make("f3.py", "")
+
+        result = self.service.glob("*.py", str(self.root), max_results=2)
+
+        self.assertIn("+1 more", result)
 
     def test_glob_skips_ignored_directories(self):
         self.make(".venv/lib.py", "")
