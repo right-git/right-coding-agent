@@ -213,7 +213,14 @@ class VoiceController:
     # --------------------------------------------------- transcript delivery
 
     def _submit(self, text: str) -> None:
-        """Hand the transcript to the main loop: exit the live prompt, or park it."""
+        """Hand the transcript to the main loop: type it into the live prompt, or park it.
+
+        The transcript goes through the prompt buffer and `validate_and_handle`
+        (a programmatic Enter) instead of `app.exit(result=...)` so the user
+        SEES what was recognized: the text shows in the prompt line, stays in
+        the scrollback, and enters the input history. Text already typed in
+        the buffer is kept — the transcript is appended after it.
+        """
         session = getattr(self.ui, "prompt_session", None)
         app = getattr(session, "app", None) if session is not None else None
         if app is None or self._loop is None:
@@ -223,7 +230,11 @@ class VoiceController:
         def push() -> None:
             try:
                 if app.is_running:
-                    app.exit(result=text)
+                    buffer = app.current_buffer
+                    existing = buffer.text.strip()
+                    buffer.text = f"{existing} {text}" if existing else text
+                    buffer.cursor_position = len(buffer.text)
+                    buffer.validate_and_handle()
                     return
             except Exception:
                 logger.exception("Could not deliver the transcript into the prompt")

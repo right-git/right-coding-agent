@@ -443,6 +443,27 @@ class VoiceControllerTests(unittest.TestCase):
         self.assertEqual(controller._sentences.get_nowait(), "Готово.")
         self.assertTrue(controller._sentences.empty())
 
+    def test_transcript_is_typed_into_the_live_prompt(self):
+        class FakeBuffer:
+            text = "поправь тесты:"
+            cursor_position = 0
+            accepted = False
+
+            def validate_and_handle(self):
+                self.accepted = True
+
+        buffer = FakeBuffer()
+        app = SimpleNamespace(is_running=True, current_buffer=buffer)
+        controller = self.make_controller()
+        controller.ui = SimpleNamespace(prompt_session=SimpleNamespace(app=app))
+        controller._loop = SimpleNamespace(call_soon_threadsafe=lambda fn: fn())
+
+        controller._submit("запусти линт")
+
+        self.assertEqual(buffer.text, "поправь тесты: запусти линт")
+        self.assertTrue(buffer.accepted)  # программный Enter — текст виден и уходит обычным путём
+        self.assertIsNone(controller.take_pending_text())
+
     def test_toggle_barges_in_on_running_speech(self):
         controller = self.make_controller()
         controller.started = True
