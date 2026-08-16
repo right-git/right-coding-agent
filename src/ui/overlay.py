@@ -71,8 +71,8 @@ ISLAND_ALPHA = 1.0  # the island must read as notch-black glass, not a tint
 ISLAND_HEIGHT = 64
 ISLAND_EXTRA = 90  # how much wider than the notch when fully out
 ISLAND_ANIM_SECONDS = 0.25
-ISLAND_RADIUS = 18
-ISLAND_BACKGROUND = "#0A0A0A"  # the notch is pure black — blend into it
+ISLAND_RADIUS = 20
+ISLAND_BACKGROUND = "#000000"  # exactly the notch's black — no visible seam
 NOTCH_FALLBACK_WIDTH = 200  # no notch detected: float a tab of this width
 NOTCH_BOTTOM = 38  # menu-bar/notch depth on notched Macs, in points
 
@@ -681,15 +681,26 @@ def _macos_hide_from_dock() -> None:
 
 
 def _macos_click_through() -> None:
-    """Let clicks pass through the pill window; show it on every Space."""
+    """Click-through plus NotchBox-style placement for the overlay window.
+
+    Tk parks +0+0 windows BELOW the menu bar (clipping the bottom edge past
+    the screen), which left a menu-bar-colored gap between the notch and the
+    island. Like the notch apps, the window is raised above the menu-bar
+    level and framed over the WHOLE screen, so Tk's y=0 is the true screen
+    top and the island really contains the notch. Clicks pass through, and
+    the overlay follows every Space and fullscreen app.
+    """
     try:
         import AppKit
 
         can_join_all_spaces = 1 << 0
         fullscreen_auxiliary = 1 << 8
+        frame = AppKit.NSScreen.mainScreen().frame()
         for window in AppKit.NSApp.windows():
             window.setIgnoresMouseEvents_(True)
             window.setCollectionBehavior_(window.collectionBehavior() | can_join_all_spaces | fullscreen_auxiliary)
+            window.setLevel_(AppKit.NSStatusWindowLevel)
+            window.setFrame_display_(frame, True)
     except Exception:
         logger.debug("Could not enable macOS click-through for the overlay")
 
