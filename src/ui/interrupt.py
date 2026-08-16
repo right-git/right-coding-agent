@@ -1,4 +1,4 @@
-"""Cancel a running turn from the keyboard (Esc).
+"""Cancel a running turn from the keyboard (Esc, Ctrl+C).
 
 While the model works, the prompt is closed and prompt_toolkit key bindings
 cannot fire, so a watcher thread reads console keys raw. Esc requests
@@ -7,6 +7,14 @@ as `typed_text` and handed back to the next prompt as type-ahead, so typing
 the next message while a turn runs still works. Raw console reading is
 Windows-only for now (msvcrt); elsewhere `EscapeWatcher.create()` returns
 None and turns simply run to completion.
+
+`InterruptPolicy` backs the Unix SIGINT handler: the first Ctrl+C cancels
+the turn, a second within the window force-quits. The distinction matters
+because a turn blocked inside `asyncio.to_thread` (MPS inference, whisper
+finalize) cannot actually be cancelled until the thread ends — asyncio only
+defers the cancellation — so a stuck turn made Ctrl+C look dead and pushed
+users toward Ctrl+Z, which suspends the process with the microphone still
+attached.
 """
 
 import sys
@@ -15,6 +23,20 @@ import threading
 
 class TurnCancelled(Exception):
     """The user pressed Esc while the turn was running."""
+
+
+class InterruptPolicy:
+    """First Ctrl+C asks to cancel; a repeat within `window` seconds forces quit."""
+
+    def __init__(self, window: float = 2.0):
+        self.window = window
+        self._last = float("-inf")
+
+    def press(self, now: float) -> str:
+        """ "cancel" for a lone press, "force" for a double press."""
+        action = "force" if now - self._last <= self.window else "cancel"
+        self._last = now
+        return action
 
 
 def _windows_reader():

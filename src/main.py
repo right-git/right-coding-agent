@@ -1,4 +1,6 @@
 import asyncio
+import os
+import signal
 import threading
 import time
 
@@ -15,7 +17,7 @@ from src.llm.utils import (
     trim_incomplete_tool_calls,
 )
 from src.ui import ChatUI
-from src.ui.interrupt import TurnCancelled
+from src.ui.interrupt import InterruptPolicy, TurnCancelled
 
 # The startup model comes from .env (LLM_DEFAULT_MODEL); /model can switch
 # to anything else at runtime.
@@ -87,6 +89,32 @@ async def report_usage(
         )
     except Exception:
         logger.exception("Failed to report token usage for model [{}]", model)
+
+
+def make_sigint_handler(policy: InterruptPolicy, ui, current_turn: dict, *, force_exit=os._exit, clock=time.monotonic):
+    """Ctrl+C during a turn: cancel it; a double press force-quits the process.
+
+    Cancelling a turn stuck inside `asyncio.to_thread` only takes effect when
+    the thread ends — the executor job itself cannot be interrupted — so the
+    double press is the guaranteed way out: process death frees the
+    microphone and the GPU no matter what any thread is doing. Installed via
+    `loop.add_signal_handler` (Unix; at the prompt prompt_toolkit's raw mode
+    handles Ctrl+C itself and returns /quit).
+    """
+
+    def on_sigint() -> None:
+        if policy.press(now=clock()) == "force":
+            logger.warning("Force quit on double Ctrl+C")
+            force_exit(130)
+            return
+        task = current_turn.get("task")
+        if task is not None and not task.done():
+            ui.print_warning("interrupting the turn — press Ctrl+C again to force quit")
+            task.cancel()
+        else:
+            ui.print_warning("press Ctrl+C again to force quit")
+
+    return on_sigint
 
 
 def turn_callbacks(ui: ChatUI, stream) -> tuple:
@@ -309,6 +337,14 @@ async def main():
     # the interpreter in concurrent.futures' atexit join.
     threading.Thread(target=preload_vision_model, args=(ui,), name="vision-preload", daemon=True).start()
 
+    current_turn: dict = {"task": None}
+    try:
+        asyncio.get_running_loop().add_signal_handler(
+            signal.SIGINT, make_sigint_handler(InterruptPolicy(), ui, current_turn)
+        )
+    except (NotImplementedError, RuntimeError):
+        pass  # Windows event loops have no add_signal_handler; Esc covers turns there
+
     try:
         while True:
             user_content = await ui.get_input()
@@ -326,17 +362,28 @@ async def main():
                 model = ui.model
                 continue
 
-            messages = await process_user_turn(
-                agents=agents,
-                ui=ui,
-                messages=messages,
-                model=model,
-                user_content=ui.take_user_content(user_content),
-                catalog=catalog,
-                session_usage=session_usage,
-                reasoning_effort=ui.reasoning_effort,
-                temperature=ui.temperature,
+            turn = asyncio.create_task(
+                process_user_turn(
+                    agents=agents,
+                    ui=ui,
+                    messages=messages,
+                    model=model,
+                    user_content=ui.take_user_content(user_content),
+                    catalog=catalog,
+                    session_usage=session_usage,
+                    reasoning_effort=ui.reasoning_effort,
+                    temperature=ui.temperature,
+                )
             )
+            current_turn["task"] = turn
+            try:
+                messages = await turn
+            except asyncio.CancelledError:
+                # Ctrl+C: keep the pre-turn history, like an Esc cancel.
+                ui.cancel_voice_turn()
+                ui.print_warning("turn interrupted (Ctrl+C)")
+            finally:
+                current_turn["task"] = None
     finally:
         catalog_task.cancel()
 

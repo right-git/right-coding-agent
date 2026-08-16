@@ -12,6 +12,71 @@ from src.ui.chat import ChatUI
 from src.ui.interrupt import EscapeWatcher, TurnCancelled
 
 
+class InterruptPolicyTests(unittest.TestCase):
+    def test_single_presses_cancel_and_spaced_presses_stay_cancels(self):
+        from src.ui.interrupt import InterruptPolicy
+
+        policy = InterruptPolicy(window=2.0)
+        self.assertEqual(policy.press(now=100.0), "cancel")
+        self.assertEqual(policy.press(now=103.0), "cancel")  # window expired
+
+    def test_a_second_press_within_the_window_forces_quit(self):
+        from src.ui.interrupt import InterruptPolicy
+
+        policy = InterruptPolicy(window=2.0)
+        policy.press(now=100.0)
+        self.assertEqual(policy.press(now=101.0), "force")
+
+
+class SigintHandlerTests(unittest.TestCase):
+    """Ctrl+C during a turn: cancel first, force-quit on a double press.
+
+    A turn blocked inside asyncio.to_thread (MPS inference, whisper) cannot
+    actually be cancelled until the thread ends — only process death reliably
+    frees the microphone, hence the force path.
+    """
+
+    def make_handler(self):
+        from src.main import make_sigint_handler
+        from src.ui.interrupt import InterruptPolicy
+
+        ui = Mock()
+        current_turn = {"task": None}
+        force_exit = Mock()
+        clock = Mock(side_effect=[100.0, 101.0, 200.0, 300.0])
+        handler = make_sigint_handler(InterruptPolicy(window=2.0), ui, current_turn, force_exit=force_exit, clock=clock)
+        return handler, ui, current_turn, force_exit
+
+    def test_first_press_cancels_the_running_turn(self):
+        handler, ui, current_turn, force_exit = self.make_handler()
+        task = Mock()
+        task.done.return_value = False
+        current_turn["task"] = task
+
+        handler()
+
+        task.cancel.assert_called_once()
+        force_exit.assert_not_called()
+        ui.print_warning.assert_called_once()
+
+    def test_second_press_within_the_window_hard_exits(self):
+        handler, ui, current_turn, force_exit = self.make_handler()
+        current_turn["task"] = Mock(done=Mock(return_value=False))
+
+        handler()
+        handler()
+
+        force_exit.assert_called_once_with(130)
+
+    def test_press_without_a_turn_only_warns(self):
+        handler, ui, current_turn, force_exit = self.make_handler()
+
+        handler()
+
+        force_exit.assert_not_called()
+        ui.print_warning.assert_called_once()
+
+
 class EscapeWatcherTests(unittest.TestCase):
     def test_escape_sets_the_event_and_typing_is_stashed(self):
         watcher = EscapeWatcher(read_keys=lambda: "")
