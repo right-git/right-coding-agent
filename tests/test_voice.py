@@ -2,7 +2,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -565,12 +565,16 @@ class FakeStatusOverlay:
     def __init__(self):
         self.voice_states = []
         self.pings = 0
+        self.prewarmed = False
 
     def set_voice(self, state):
         self.voice_states.append(state)
 
     def ping_computer(self, linger=3.0):
         self.pings += 1
+
+    def prewarm(self):
+        self.prewarmed = True
 
 
 class VoiceControllerTests(unittest.TestCase):
@@ -588,6 +592,15 @@ class VoiceControllerTests(unittest.TestCase):
             step_interval=999,
             status_overlay=FakeStatusOverlay(),
         )
+
+    def test_start_input_prewarms_the_overlay(self):
+        # The macOS overlay child takes ~a second to boot; spawning it with the
+        # REPL means the pill shows the instant the hotkey is first pressed.
+        controller = self.make_controller()
+        controller.start_input()
+        self.addCleanup(controller.shutdown)
+
+        self.assertTrue(controller._status_overlay.prewarmed)
 
     def test_toggle_records_then_submits_the_transcript(self):
         controller = self.make_controller()
@@ -751,19 +764,6 @@ class StatusOverlayTests(unittest.TestCase):
         self.assertEqual(blend("#000000", "#ff0000", 1.0), "#ff0000")
         self.assertEqual(blend("#000000", "#ff0000", 0.5), "#800000")
 
-    def test_overlay_refuses_to_start_where_tk_needs_the_main_thread(self):
-        # AppKit aborts the WHOLE process (SIGABRT in TkMacOSXMakeRealWindowExist)
-        # when a Tk window is created off the main thread — seen live on macOS
-        # at the end of the first voice turn.
-        from src.ui.overlay import StatusOverlay
-
-        overlay = StatusOverlay()
-        with patch("src.ui.overlay.tk_thread_supported", return_value=False):
-            overlay.set_voice("listening")
-            overlay.ping_computer()
-
-        self.assertIsNone(overlay._thread)
-
     def test_hidden_voice_state_never_starts_the_window(self):
         from src.ui.overlay import StatusOverlay
 
@@ -772,6 +772,148 @@ class StatusOverlayTests(unittest.TestCase):
             overlay.set_voice(None)  # already hidden — nothing to show
 
         self.assertIsNone(overlay._thread)
+
+
+class FakeOverlayChild:
+    """Stands in for the overlay child process (subprocess.Popen shape)."""
+
+    def __init__(self):
+        self.lines: list[str] = []
+        self.exit_code = None
+        self.terminated = False
+        self.stdin = SimpleNamespace(
+            write=self.lines.append,
+            flush=lambda: None,
+            close=lambda: None,
+        )
+
+    def poll(self):
+        return self.exit_code
+
+    def wait(self, timeout=None):
+        return 0
+
+    def terminate(self):
+        self.terminated = True
+
+
+class OverlayChildProcessTests(unittest.TestCase):
+    """On macOS the overlay runs in a child process: Tk windows are only legal
+    on a main thread, and AppKit aborts the whole app otherwise."""
+
+    def make_child_overlay(self):
+        from src.ui.overlay import StatusOverlay
+
+        child = FakeOverlayChild()
+        return StatusOverlay(child_factory=lambda: child), child
+
+    def test_commands_roundtrip_through_the_wire_format(self):
+        from src.ui.overlay import decode_command, encode_command
+
+        cases = [("voice", "listening"), ("voice", None), ("computer", 3.0), ("stop", None)]
+        for command, payload in cases:
+            self.assertEqual(decode_command(encode_command(command, payload)), (command, payload))
+        self.assertIsNone(decode_command("not json"))
+        self.assertIsNone(decode_command('{"command": "unknown"}'))
+
+    def test_macos_backend_sends_voice_commands_to_the_child(self):
+        from src.ui.overlay import decode_command
+
+        overlay, child = self.make_child_overlay()
+        with patch("src.ui.overlay.tk_thread_supported", return_value=False):
+            overlay.set_voice("listening")
+            overlay.set_voice(None)
+
+        self.assertIsNone(overlay._thread)
+        decoded = [decode_command(line) for line in child.lines]
+        self.assertEqual(decoded, [("voice", "listening"), ("voice", None)])
+
+    def test_computer_pings_are_dropped_on_macos(self):
+        # The child draws only the voice pill — there is no border to ping,
+        # and screen tools must not spawn a child for nothing.
+        overlay, child = self.make_child_overlay()
+        with patch("src.ui.overlay.tk_thread_supported", return_value=False):
+            overlay.ping_computer()
+
+        self.assertEqual(child.lines, [])
+
+    def test_dead_child_disables_the_overlay(self):
+        overlay, child = self.make_child_overlay()
+        child.stdin.write = Mock(side_effect=BrokenPipeError)
+        with patch("src.ui.overlay.tk_thread_supported", return_value=False):
+            overlay.set_voice("listening")
+            overlay.set_voice("listening")  # must be a silent no-op now
+
+        self.assertTrue(overlay._failed)
+
+    def test_prewarm_spawns_the_child_before_the_first_command(self):
+        overlay, child = self.make_child_overlay()
+        with patch("src.ui.overlay.tk_thread_supported", return_value=False):
+            overlay.prewarm()
+
+        self.assertEqual(child.lines, [])
+        with patch("src.ui.overlay.tk_thread_supported", return_value=False):
+            overlay.set_voice("listening")
+        self.assertEqual(len(child.lines), 1)
+
+    def test_child_reader_feeds_the_command_queue_until_stop(self):
+        import io
+        import queue as queue_module
+
+        from src.ui.overlay import _read_commands, encode_command
+
+        lines = [
+            encode_command("voice", "listening"),
+            "garbage",
+            encode_command("computer", 3.0),
+            encode_command("stop", None),
+            encode_command("voice", "syncing"),  # after stop — must not be read
+        ]
+        commands: queue_module.Queue = queue_module.Queue()
+        _read_commands(io.StringIO("\n".join(lines) + "\n"), commands)
+
+        drained = []
+        while not commands.empty():
+            drained.append(commands.get())
+        self.assertEqual(drained, [("voice", "listening"), ("computer", 3.0), ("stop", None)])
+
+    def test_child_reader_stops_on_eof(self):
+        import io
+        import queue as queue_module
+
+        from src.ui.overlay import _read_commands
+
+        commands: queue_module.Queue = queue_module.Queue()
+        _read_commands(io.StringIO(""), commands)
+
+        self.assertEqual(commands.get_nowait(), ("stop", None))
+
+    def test_pill_sits_above_the_bottom_on_big_screens_and_centers_in_small_windows(self):
+        from src.ui.overlay import PILL_HEIGHT, PILL_MARGIN, pill_top
+
+        self.assertEqual(pill_top(1080), 1080 - PILL_MARGIN - PILL_HEIGHT)
+        self.assertEqual(pill_top(88), (88 - PILL_HEIGHT) // 2)
+
+    def test_tcl_env_is_derived_from_the_base_interpreter(self):
+        import os
+        import tempfile
+        from pathlib import Path
+
+        from src.ui.overlay import _ensure_tcl_env
+
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "lib" / "tcl8.6").mkdir(parents=True)
+            (Path(tmp) / "lib" / "tk8.6").mkdir(parents=True)
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("TCL_LIBRARY", None)
+                os.environ.pop("TK_LIBRARY", None)
+                _ensure_tcl_env(base_prefix=tmp)
+                self.assertEqual(os.environ["TCL_LIBRARY"], str(Path(tmp) / "lib" / "tcl8.6"))
+                self.assertEqual(os.environ["TK_LIBRARY"], str(Path(tmp) / "lib" / "tk8.6"))
+
+            with patch.dict(os.environ, {"TCL_LIBRARY": "/custom"}, clear=False):
+                _ensure_tcl_env(base_prefix=tmp)
+                self.assertEqual(os.environ["TCL_LIBRARY"], "/custom")  # never overrides
 
 
 class VoiceUiTests(unittest.TestCase):

@@ -87,6 +87,7 @@ class VoiceController:
         self._speech_worker = threading.Thread(target=self._speech_loop, daemon=True)
         self._speech_worker.start()
         self._listener.start()
+        self._prewarm_overlay()
         threading.Thread(target=self._warm_up_asr, daemon=True).start()
 
     def set_speaking(self, on: bool) -> None:
@@ -120,15 +121,30 @@ class VoiceController:
         self._filter = SpeakableFilter()
         self._set_overlay_voice(None)
 
+    def _overlay(self):
+        if self._status_overlay is None:
+            from src.ui.overlay import get_status_overlay
+
+            self._status_overlay = get_status_overlay()
+        return self._status_overlay
+
+    def _prewarm_overlay(self) -> None:
+        """Boot the overlay backend with the REPL so the first press shows the pill instantly.
+
+        The macOS overlay is a child process that takes ~a second to start —
+        too slow to launch lazily on the first hotkey press.
+        """
+        try:
+            prewarm = getattr(self._overlay(), "prewarm", None)
+            if prewarm is not None:
+                prewarm()
+        except Exception:
+            logger.exception("Status overlay prewarm failed")
+
     def _set_overlay_voice(self, state: str | None) -> None:
         """Update the on-screen voice pill (listening/syncing/hidden)."""
         try:
-            overlay = self._status_overlay
-            if overlay is None:
-                from src.ui.overlay import get_status_overlay
-
-                overlay = self._status_overlay = get_status_overlay()
-            overlay.set_voice(state)
+            self._overlay().set_voice(state)
         except Exception:
             logger.exception("Status overlay update failed")
 
