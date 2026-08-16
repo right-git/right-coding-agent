@@ -59,7 +59,8 @@ BORDER_COLOR = "#FF3B30"
 BORDER_DIM = "#57120D"
 FRAME_MS = 66  # ~15 fps
 COMPUTER_LINGER = 3.0
-PILL_WIDTH, PILL_HEIGHT, PILL_MARGIN = 240, 56, 96
+PILL_WIDTH, PILL_HEIGHT, PILL_MARGIN = 150, 36, 48
+OVERLAY_ALPHA = 0.75  # macOS: the whole overlay is translucent, unobtrusive
 
 
 def blend(color_a: str, color_b: str, t: float) -> str:
@@ -392,6 +393,8 @@ class StatusOverlay:
             try:
                 root.attributes("-transparent", True)  # macOS: true per-pixel alpha
                 root.config(bg="systemTransparent")
+                # Empty areas stay fully clear; everything drawn is translucent.
+                root.attributes("-alpha", OVERLAY_ALPHA)
                 return "systemTransparent"
             except tkinter.TclError:
                 pass
@@ -536,26 +539,26 @@ class StatusOverlay:
             (left, top, left + 2 * radius, bottom),
             (right - 2 * radius, top, right, bottom),
         ):
-            canvas.create_oval(*shape, fill=PILL_BACKGROUND, outline=accent, width=2)
+            canvas.create_oval(*shape, fill=PILL_BACKGROUND, outline=accent, width=1)
         canvas.create_rectangle(left + radius, top, right - radius, bottom, fill=PILL_BACKGROUND, outline="")
         for y in (top, bottom):
-            canvas.create_line(left + radius, y, right - radius, y, fill=accent, width=2)
+            canvas.create_line(left + radius, y, right - radius, y, fill=accent, width=1)
 
         center_y = (top + bottom) // 2
         if self.voice_state == "listening":
-            bars = 9
-            spacing = 14
+            bars = 7
+            spacing = 9
             start_x = (width - (bars - 1) * spacing) // 2
             for index in range(bars):
                 wave = abs(math.sin(now * 6.0 + index * 0.9))
-                half = 4 + wave * 14
+                half = 2 + wave * 8
                 x = start_x + index * spacing
-                canvas.create_line(x, center_y - half, x, center_y + half, fill=accent, width=4, capstyle="round")
+                canvas.create_line(x, center_y - half, x, center_y + half, fill=accent, width=3, capstyle="round")
         else:  # syncing: три пульсирующие точки
             for index in range(3):
                 wave = 0.5 + 0.5 * math.sin(now * 5.0 - index * 0.9)
-                radius_dot = 4 + wave * 5
-                x = width // 2 + (index - 1) * 26
+                radius_dot = 2.5 + wave * 3
+                x = width // 2 + (index - 1) * 16
                 canvas.create_oval(
                     x - radius_dot,
                     center_y - radius_dot,

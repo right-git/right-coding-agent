@@ -61,6 +61,8 @@ class VoiceController:
         self._draft = ""
         self._record_stop = threading.Event()
         self._record_worker: threading.Thread | None = None
+        self._finalize_worker: threading.Thread | None = None
+        self._finalize_lock = threading.Lock()  # keeps overlapping transcripts ordered
         self._sentences: queue.Queue = queue.Queue()
         self._speech_stop = threading.Event()
         self._speech_worker: threading.Thread | None = None
@@ -213,46 +215,69 @@ class VoiceController:
         self._recording = True
         self._record_started = time.monotonic()
         self._draft = ""
-        self._record_stop.clear()
-        self._record_worker = threading.Thread(target=self._record_loop, daemon=True)
+        # A fresh Event per recording: an old worker still finishing its slow
+        # step must never latch onto the next recording's cleared flag.
+        self._record_stop = threading.Event()
+        self._record_worker = threading.Thread(
+            target=self._record_loop, args=(self._session, self._record_stop), daemon=True
+        )
         self._record_worker.start()
         logger.info("PTT: recording started")
         self._set_overlay_voice("listening")
         self._invalidate()
 
-    def _record_loop(self) -> None:
-        while not self._record_stop.wait(self.step_interval):
+    def _record_loop(self, session, stop: threading.Event) -> None:
+        while not stop.wait(self.step_interval):
             try:
-                draft = self._session.step(self._recorder.snapshot())
-                self._draft = (self._session.committed + draft).strip()
+                draft = session.step(self._recorder.snapshot())
+                self._draft = (session.committed + draft).strip()
             except Exception:
                 logger.exception("Incremental transcription step failed")
             self._invalidate()
 
     def _finish_recording(self) -> None:
+        """Second press: instant feedback, then transcription in the background.
+
+        Feedback first — the pill flips to "syncing" and the prompt stopwatch
+        disappears the moment the key is released. The slow parts (waiting out
+        the worker's in-flight whisper step, then finalize — seconds on CPU)
+        run on a finalize thread so the hotkey stays responsive throughout.
+        """
         self._recording = False
         self._record_stop.set()
-        if self._record_worker is not None:
-            self._record_worker.join(timeout=15)
-        audio = self._recorder.stop()
-        started = time.monotonic()
-        text = ""
-        try:
-            text = self._session.finalize(audio)
-        except Exception:
-            logger.exception("Transcription finalize failed")
-        logger.info(
-            "PTT: recording stopped — audio {:.1f}s, finalize {:.2f}s, text_chars {}",
-            len(audio) / 16_000,
-            time.monotonic() - started,
-            len(text),
-        )
+        audio = self._recorder.stop()  # fast: closes the stream, returns the buffer
+        worker, self._record_worker = self._record_worker, None
+        session, self._session = self._session, None
         self._draft = ""
-        self._set_overlay_voice("syncing" if text else None)
+        self._set_overlay_voice("syncing")
         self._invalidate()
-        if text:
-            self._submit(text)
-            self._play_sent_cue()
+        self._finalize_worker = threading.Thread(
+            target=self._finalize_recording, args=(worker, session, audio), daemon=True
+        )
+        self._finalize_worker.start()
+
+    def _finalize_recording(self, worker, session, audio) -> None:
+        with self._finalize_lock:
+            if worker is not None:
+                worker.join(timeout=15)  # the session is not thread-safe: let its last step end
+            started = time.monotonic()
+            text = ""
+            try:
+                text = session.finalize(audio)
+            except Exception:
+                logger.exception("Transcription finalize failed")
+            logger.info(
+                "PTT: recording stopped — audio {:.1f}s, finalize {:.2f}s, text_chars {}",
+                len(audio) / 16_000,
+                time.monotonic() - started,
+                len(text),
+            )
+            if text:
+                self._submit(text)
+                self._play_sent_cue()
+            else:
+                self._set_overlay_voice(None)  # nothing recognized — hide the pill
+                self._invalidate()
 
     # --------------------------------------------------- transcript delivery
 

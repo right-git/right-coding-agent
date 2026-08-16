@@ -613,10 +613,63 @@ class VoiceControllerTests(unittest.TestCase):
 
         with patch("src.ui.sound.play_done_sound") as cue:
             controller.toggle()
+            controller._finalize_worker.join(timeout=2)
         self.assertFalse(controller._recording)
         self.assertEqual(controller.take_pending_text(), "привет мир")
         self.assertIsNone(controller.take_pending_text())
         cue.assert_called_once()  # звук — подтверждение отправки из любого окна
+
+    def test_second_press_stops_the_animation_before_transcription_finishes(self):
+        # Finalize takes seconds on CPU — the pill and the prompt stopwatch
+        # must react to the key instantly, not after the transcription.
+        import threading as threading_module
+
+        from src.ui.voice import VoiceController
+
+        gate = threading_module.Event()
+
+        class GatedSession:
+            committed = ""
+
+            def step(self, audio):
+                return ""
+
+            def finalize(self, audio):
+                gate.wait(2)
+                return "готово"
+
+        class GatedTranscriber:
+            def load(self):
+                return None
+
+            def open_session(self):
+                return GatedSession()
+
+        overlay = FakeStatusOverlay()
+        controller = VoiceController(
+            SimpleNamespace(prompt_session=None, sound_enabled=False),
+            transcriber=GatedTranscriber(),
+            speaker=FakeVoiceSpeaker(),
+            recorder=FakeVoiceRecorder(np.zeros(SAMPLE_RATE, dtype=np.float32)),
+            player=FakeVoicePlayer(),
+            listener=FakeHotkeyListener(),
+            step_interval=999,
+            status_overlay=overlay,
+        )
+        controller.started = True
+        self.addCleanup(controller.shutdown)
+
+        controller.toggle()
+        controller.toggle()  # must return immediately, before finalize is done
+
+        self.assertFalse(controller._recording)
+        self.assertEqual(overlay.voice_states[-1], "syncing")
+        self.assertEqual(controller.status(), "")  # the 🎙 stopwatch is gone at once
+        self.assertIsNone(controller.take_pending_text())  # still transcribing
+
+        gate.set()
+        controller._finalize_worker.join(timeout=2)
+        self.assertEqual(controller.take_pending_text(), "готово")
 
     def test_empty_transcript_is_not_submitted_and_stays_silent(self):
         controller = self.make_controller()
@@ -626,6 +679,7 @@ class VoiceControllerTests(unittest.TestCase):
         controller.toggle()
         with patch("src.ui.sound.play_done_sound") as cue:
             controller.toggle()
+            controller._finalize_worker.join(timeout=2)
 
         self.assertIsNone(controller.take_pending_text())
         cue.assert_not_called()
@@ -704,6 +758,7 @@ class VoiceControllerTests(unittest.TestCase):
         controller.toggle()  # запись
         with patch("src.ui.sound.play_done_sound"):
             controller.toggle()  # стоп + отправка
+            controller._finalize_worker.join(timeout=2)
         controller.finish_turn()  # ответ пришёл
         self.addCleanup(controller.shutdown)
 
@@ -717,8 +772,11 @@ class VoiceControllerTests(unittest.TestCase):
 
         controller.toggle()
         controller.toggle()
+        controller._finalize_worker.join(timeout=2)
 
-        self.assertEqual(overlay.voice_states, ["listening", None])
+        # "syncing" flips on immediately at the second press; the empty
+        # transcript then hides the pill.
+        self.assertEqual(overlay.voice_states, ["listening", "syncing", None])
 
     def test_voice_off_mutes_replies_but_keeps_push_to_talk(self):
         controller = self.make_controller()
@@ -956,7 +1014,8 @@ class OverlayChildProcessTests(unittest.TestCase):
         from src.ui.overlay import PILL_HEIGHT, PILL_MARGIN, pill_top
 
         self.assertEqual(pill_top(1080), 1080 - PILL_MARGIN - PILL_HEIGHT)
-        self.assertEqual(pill_top(88), (88 - PILL_HEIGHT) // 2)
+        small_window = PILL_HEIGHT + 32  # the pill-only fallback window
+        self.assertEqual(pill_top(small_window), (small_window - PILL_HEIGHT) // 2)
 
     def test_tcl_env_is_derived_from_the_base_interpreter(self):
         import os
