@@ -1,25 +1,27 @@
 """Always-on-top status indication drawn over the desktop.
 
-Two independent layers:
+Independent layers:
 
-- the **voice pill** at the bottom of the screen — animated level bars while
-  recording ("listening"), pulsing dots from send until the reply lands
-  ("syncing");
+- the **voice indicator** — animated level bars while recording
+  ("listening"), pulsing dots from send until the reply lands ("syncing").
+  On Windows/Linux it is a small pill at the bottom of the screen; on macOS
+  it is a **notch island**: an opaque black rounded-bottom slab that pops
+  out of the physical notch at the top center (width from
+  NSScreen.safeAreaInsets/auxiliary areas, NOTCH_FALLBACK_WIDTH without a
+  notch) and retracts when idle, with ease-out animation both ways;
 - the **computer border** — a breathing accent frame around the screen while
-  the agent drives the desktop: a "hands off, the AI is working" signal,
-  refreshed by every screen tool call and fading out a few seconds after the
-  last one.
+  the agent drives the desktop, refreshed by every screen tool call;
+- **element markers** — screen_locate(mark=True) highlights with tooltips.
 
 Backends: on Windows/Linux one Tk loop THREAD owns a fullscreen transparent
 click-through window. On macOS AppKit only allows window creation on the main
 thread (a Tk root on any other thread aborts the whole process — shipped once
 as SIGABRT in TkMacOSXMakeRealWindowExist), so the overlay runs as a CHILD
 PROCESS: `python src/ui/overlay.py` puts Tk on the child's main thread and
-reads JSON commands from stdin, and it draws only the voice pill in a small
-bottom-center window (no fullscreen border — a small window cannot block the
-desktop even if click-through fails). This module must therefore stay
-importable as a plain script: stdlib + loguru only, no `src.*` imports at
-module level.
+reads JSON commands from stdin; without AppKit (no click-through guarantee)
+it falls back to a small bottom pill window that cannot block the desktop.
+This module must therefore stay importable as a plain script: stdlib +
+loguru only, no `src.*` imports at module level.
 
 `set_voice`/`ping_computer` only queue/send commands and never block. Every
 failure is swallowed and logged — status indication must never break a turn.
@@ -60,7 +62,32 @@ BORDER_DIM = "#57120D"
 FRAME_MS = 66  # ~15 fps
 COMPUTER_LINGER = 3.0
 PILL_WIDTH, PILL_HEIGHT, PILL_MARGIN = 150, 36, 48
-OVERLAY_ALPHA = 0.75  # macOS: the whole overlay is translucent, unobtrusive
+OVERLAY_ALPHA = 0.75  # macOS pill fallback: translucent, unobtrusive
+ISLAND_ALPHA = 1.0  # the island must read as notch-black glass, not a tint
+
+# Dynamic-island mode (macOS): the indicator pops out of the notch at the top
+# center instead of a bottom pill. Content sits BELOW the physical notch —
+# anything drawn behind it is invisible.
+ISLAND_HEIGHT = 64
+ISLAND_EXTRA = 90  # how much wider than the notch when fully out
+ISLAND_ANIM_SECONDS = 0.25
+ISLAND_RADIUS = 18
+ISLAND_BACKGROUND = "#0A0A0A"  # the notch is pure black — blend into it
+NOTCH_FALLBACK_WIDTH = 200  # no notch detected: float a tab of this width
+NOTCH_BOTTOM = 38  # menu-bar/notch depth on notched Macs, in points
+
+
+def ease_out_cubic(t: float) -> float:
+    """Fast start, soft landing — the pop-out feel; input clamped to [0, 1]."""
+    t = min(1.0, max(0.0, t))
+    return 1.0 - (1.0 - t) ** 3
+
+
+def island_geometry(screen_width: int, notch_width: int, progress: float) -> tuple[int, int, int]:
+    """(left, right, height) of the island at `progress` — collapsed it IS the notch."""
+    width = notch_width + round(ISLAND_EXTRA * progress)
+    left = (screen_width - width) // 2
+    return left, left + width, round(ISLAND_HEIGHT * progress)
 
 
 def blend(color_a: str, color_b: str, t: float) -> str:
@@ -172,11 +199,22 @@ def _ensure_tcl_env(base_prefix: str | None = None) -> None:
 class StatusOverlay:
     """Queue/pipe-driven overlay; safe to call from any thread."""
 
-    def __init__(self, screen_size=None, child_factory=None, pill_only: bool = False, marker_scale: float = 1.0):
+    def __init__(
+        self,
+        screen_size=None,
+        child_factory=None,
+        pill_only: bool = False,
+        marker_scale: float = 1.0,
+        island: bool = False,
+    ):
         self.screen_size = screen_size
         self.pill_only = pill_only  # fallback child mode: small pill window only
         self.marker_scale = marker_scale  # capture pixels per Tk point (retina: 2)
+        self.island = island  # macOS: notch island at top center instead of the pill
+        self.notch_width = 0  # physical notch width in points; 0 = none detected
         self.voice_state: str | None = None  # None | "listening" | "syncing"
+        self.voice_shown_at = 0.0  # monotonic marks driving the pop/retract animation
+        self.voice_hidden_at = 0.0
         self.computer_until = 0.0  # monotonic deadline of the border layer
         self.marker: dict | None = None  # screen_mark highlight, capture coords
         self.marker_until = 0.0
@@ -242,6 +280,10 @@ class StatusOverlay:
     def _apply(self, command: str, payload, *, now: float | None = None) -> None:
         now = time.monotonic() if now is None else now
         if command == "voice":
+            if payload is not None and self.voice_state is None:
+                self.voice_shown_at = now  # pop out (state swaps while visible don't re-pop)
+            elif payload is None and self.voice_state is not None:
+                self.voice_hidden_at = now  # retract
             self.voice_state = payload
         elif command == "computer":
             self.computer_until = max(self.computer_until, now + payload)
@@ -257,10 +299,21 @@ class StatusOverlay:
         now = time.monotonic() if now is None else now
         return self.marker is not None and now < self.marker_until
 
+    def island_progress(self, now: float | None = None) -> float:
+        """0..1 pop-out amount of the island: eases out on show, back in on hide."""
+        now = time.monotonic() if now is None else now
+        if self.voice_state is not None:
+            return ease_out_cubic((now - self.voice_shown_at) / ISLAND_ANIM_SECONDS)
+        if self.voice_hidden_at <= 0:
+            return 0.0
+        return 1.0 - ease_out_cubic((now - self.voice_hidden_at) / ISLAND_ANIM_SECONDS)
+
     def _has_content(self, now: float) -> bool:
         """Whether anything must be on screen; border and markers need the fullscreen window."""
         if self.voice_state is not None:
             return True
+        if self.island and self.voice_hidden_at > 0 and now - self.voice_hidden_at < ISLAND_ANIM_SECONDS:
+            return True  # keep drawing the retract animation
         if self.pill_only:
             return False
         return self.computer_active(now) or self.marker_active(now)
@@ -381,8 +434,7 @@ class StatusOverlay:
         root.geometry(f"{width}x{height}+{x}+{y}")
         return width, height
 
-    @staticmethod
-    def _pick_background(root, tkinter) -> str:
+    def _pick_background(self, root, tkinter) -> str:
         """Best transparency the platform offers, most transparent first."""
         try:
             root.attributes("-transparentcolor", TRANSPARENT_KEY)  # Windows: color key
@@ -393,8 +445,9 @@ class StatusOverlay:
             try:
                 root.attributes("-transparent", True)  # macOS: true per-pixel alpha
                 root.config(bg="systemTransparent")
-                # Empty areas stay fully clear; everything drawn is translucent.
-                root.attributes("-alpha", OVERLAY_ALPHA)
+                # Empty areas stay fully clear; drawn content is translucent —
+                # except the island, which must merge with the black notch.
+                root.attributes("-alpha", ISLAND_ALPHA if self.island else OVERLAY_ALPHA)
                 return "systemTransparent"
             except tkinter.TclError:
                 pass
@@ -474,8 +527,38 @@ class StatusOverlay:
             self._draw_border(canvas, width, height, now)
         if self.marker_active(now) and not self.pill_only:
             self._draw_marker(canvas, width, height)
-        if self.voice_state is not None:
+        if self.island:
+            if self.island_progress(now) > 0:
+                self._draw_island(canvas, width, now)
+        elif self.voice_state is not None:
             self._draw_pill(canvas, width, height, now)
+
+    def _draw_island(self, canvas, width: int, now: float) -> None:
+        """The notch island: a black rounded-bottom slab sliding out of the top edge."""
+        progress = self.island_progress(now)
+        left, right, height = island_geometry(width, self.notch_width or NOTCH_FALLBACK_WIDTH, progress)
+        if height <= 2:
+            return
+        radius = min(ISLAND_RADIUS, height // 2)
+        canvas.create_rectangle(left, 0, right, height - radius, fill=ISLAND_BACKGROUND, outline="")
+        canvas.create_rectangle(
+            left + radius, height - radius, right - radius, height, fill=ISLAND_BACKGROUND, outline=""
+        )
+        for corner_left in (left, right - 2 * radius):
+            canvas.create_oval(
+                corner_left, height - 2 * radius, corner_left + 2 * radius, height, fill=ISLAND_BACKGROUND, outline=""
+            )
+        if progress < 0.7 or self.voice_state is None:
+            return  # content fades in only once the slab is mostly out
+        accent = LISTENING_COLOR if self.voice_state == "listening" else SYNCING_COLOR
+        center_x = (left + right) // 2
+        # The physical notch is black glass — draw in the strip below it.
+        content_top = NOTCH_BOTTOM if self.notch_width else height // 3
+        center_y = (content_top + height) // 2
+        if self.voice_state == "listening":
+            self._draw_level_bars(canvas, center_x, center_y, accent, now)
+        else:
+            self._draw_sync_dots(canvas, center_x, center_y, accent, now)
 
     def _draw_marker(self, canvas, width: int, height: int) -> None:
         """The screen_mark highlight: outlined box, connector, tooltip.
@@ -557,27 +640,34 @@ class StatusOverlay:
 
         center_y = (top + bottom) // 2
         if self.voice_state == "listening":
-            bars = 7
-            spacing = 9
-            start_x = (width - (bars - 1) * spacing) // 2
-            for index in range(bars):
-                wave = abs(math.sin(now * 6.0 + index * 0.9))
-                half = 2 + wave * 8
-                x = start_x + index * spacing
-                canvas.create_line(x, center_y - half, x, center_y + half, fill=accent, width=3, capstyle="round")
-        else:  # syncing: три пульсирующие точки
-            for index in range(3):
-                wave = 0.5 + 0.5 * math.sin(now * 5.0 - index * 0.9)
-                radius_dot = 2.5 + wave * 3
-                x = width // 2 + (index - 1) * 16
-                canvas.create_oval(
-                    x - radius_dot,
-                    center_y - radius_dot,
-                    x + radius_dot,
-                    center_y + radius_dot,
-                    fill=blend(PILL_BACKGROUND, accent, 0.4 + 0.6 * wave),
-                    outline="",
-                )
+            self._draw_level_bars(canvas, width // 2, center_y, accent, now)
+        else:
+            self._draw_sync_dots(canvas, width // 2, center_y, accent, now)
+
+    @staticmethod
+    def _draw_level_bars(canvas, center_x: int, center_y: int, accent: str, now: float) -> None:
+        bars, spacing = 7, 9
+        start_x = center_x - (bars - 1) * spacing // 2
+        for index in range(bars):
+            wave = abs(math.sin(now * 6.0 + index * 0.9))
+            half = 2 + wave * 8
+            x = start_x + index * spacing
+            canvas.create_line(x, center_y - half, x, center_y + half, fill=accent, width=3, capstyle="round")
+
+    @staticmethod
+    def _draw_sync_dots(canvas, center_x: int, center_y: int, accent: str, now: float) -> None:
+        for index in range(3):
+            wave = 0.5 + 0.5 * math.sin(now * 5.0 - index * 0.9)
+            radius_dot = 2.5 + wave * 3
+            x = center_x + (index - 1) * 16
+            canvas.create_oval(
+                x - radius_dot,
+                center_y - radius_dot,
+                x + radius_dot,
+                center_y + radius_dot,
+                fill=blend(PILL_BACKGROUND, accent, 0.4 + 0.6 * wave),
+                outline="",
+            )
 
 
 def _macos_hide_from_dock() -> None:
@@ -644,11 +734,33 @@ def _macos_backing_scale() -> float:
         return 1.0
 
 
+def _macos_notch_width() -> int:
+    """Width of the physical notch in points; 0 when this screen has none."""
+    try:
+        import AppKit
+
+        screen = AppKit.NSScreen.mainScreen()
+        if not hasattr(screen, "safeAreaInsets") or screen.safeAreaInsets().top <= 0:
+            return 0
+        full = screen.frame().size.width
+        left = screen.auxiliaryTopLeftArea().size.width
+        right = screen.auxiliaryTopRightArea().size.width
+        return max(0, int(full - left - right))
+    except Exception:
+        return 0
+
+
 def run_overlay_child() -> None:
     """Entry point of the overlay child: Tk on THIS process's main thread."""
     _ensure_tcl_env()
     fullscreen = sys.platform != "darwin" or _macos_appkit_available()
-    overlay = StatusOverlay(pill_only=not fullscreen, marker_scale=_macos_backing_scale())
+    overlay = StatusOverlay(
+        pill_only=not fullscreen,
+        marker_scale=_macos_backing_scale(),
+        island=fullscreen and sys.platform == "darwin",
+    )
+    if overlay.island:
+        overlay.notch_width = _macos_notch_width()
     threading.Thread(target=_read_commands, args=(sys.stdin, overlay._commands), daemon=True).start()
     overlay._serve()
 

@@ -881,6 +881,54 @@ class StatusOverlayTests(unittest.TestCase):
         self.assertEqual(blend("#000000", "#ff0000", 1.0), "#ff0000")
         self.assertEqual(blend("#000000", "#ff0000", 0.5), "#800000")
 
+    def test_apply_records_island_show_and_hide_times(self):
+        from src.ui.overlay import StatusOverlay
+
+        overlay = StatusOverlay()
+        overlay._apply("voice", "listening", now=10.0)
+        self.assertEqual(overlay.voice_shown_at, 10.0)
+
+        overlay._apply("voice", "syncing", now=11.0)  # still visible — no re-pop
+        self.assertEqual(overlay.voice_shown_at, 10.0)
+
+        overlay._apply("voice", None, now=12.0)
+        self.assertEqual(overlay.voice_hidden_at, 12.0)
+
+    def test_island_progress_pops_out_and_retracts(self):
+        from src.ui.overlay import ISLAND_ANIM_SECONDS, StatusOverlay
+
+        overlay = StatusOverlay()
+        overlay._apply("voice", "listening", now=100.0)
+        self.assertEqual(overlay.island_progress(100.0), 0.0)
+        self.assertGreater(overlay.island_progress(100.0 + ISLAND_ANIM_SECONDS / 2), 0.5)  # ease-out
+        self.assertEqual(overlay.island_progress(100.0 + ISLAND_ANIM_SECONDS), 1.0)
+
+        overlay._apply("voice", None, now=101.0)
+        self.assertLess(overlay.island_progress(101.0 + ISLAND_ANIM_SECONDS / 2), 0.5)
+        self.assertEqual(overlay.island_progress(101.0 + ISLAND_ANIM_SECONDS), 0.0)
+
+    def test_retracting_island_keeps_the_window_alive_until_done(self):
+        from src.ui.overlay import ISLAND_ANIM_SECONDS, StatusOverlay
+
+        overlay = StatusOverlay(island=True)
+        overlay._apply("voice", "listening", now=100.0)
+        overlay._apply("voice", None, now=101.0)
+
+        self.assertTrue(overlay._has_content(101.0 + ISLAND_ANIM_SECONDS / 2))  # retract frame
+        self.assertFalse(overlay._has_content(101.0 + ISLAND_ANIM_SECONDS + 0.1))
+
+    def test_island_geometry_grows_out_of_the_notch(self):
+        from src.ui.overlay import ISLAND_EXTRA, ISLAND_HEIGHT, island_geometry
+
+        left, right, height = island_geometry(screen_width=1512, notch_width=200, progress=0.0)
+        self.assertEqual((left, right), (656, 856))  # exactly the notch, centered
+        self.assertEqual(height, 0)
+
+        left, right, height = island_geometry(screen_width=1512, notch_width=200, progress=1.0)
+        self.assertEqual(right - left, 200 + ISLAND_EXTRA)
+        self.assertEqual(left + right, 1512)  # still centered
+        self.assertEqual(height, ISLAND_HEIGHT)
+
     def test_one_bad_frame_never_freezes_the_overlay(self):
         # tick() reschedules itself with root.after; an exception escaping the
         # draw would break that chain and freeze the pill on its last frame.
