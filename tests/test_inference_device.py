@@ -60,6 +60,33 @@ class ModelSourceTests(unittest.TestCase):
         self.assertEqual(source, locator_module.MODEL_ID)
 
 
+class ConcurrentLoadTests(unittest.TestCase):
+    def test_concurrent_loads_share_one_runtime(self):
+        # The startup preload and the first screen tool used to race and load
+        # the 7 GB model TWICE — on a 16 GB machine that swap storm turned a
+        # one-minute load into many minutes.
+        import threading
+        import time as time_module
+
+        loads = []
+
+        def loader():
+            loads.append(1)
+            time_module.sleep(0.05)
+            return "runtime"
+
+        locator = LocateAnythingLocator(loader=loader, warmup=False)
+        results = []
+        threads = [threading.Thread(target=lambda: results.append(locator.load())) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(loads, [1])
+        self.assertEqual(results, ["runtime"] * 4)
+
+
 class InferenceRequestTests(unittest.TestCase):
     def test_gui_description_is_wrapped_in_the_model_prompt(self):
         prompt = locator_module.build_gui_prompt("outline button")

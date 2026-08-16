@@ -872,6 +872,62 @@ class TwoStageLocateTests(unittest.TestCase):
 
         self.assertGreater(computer.inference_calls, calls_after_first)
 
+    def test_a_nearly_identical_screen_reuses_the_result_within_the_ttl(self):
+        # A live desktop is never byte-identical between calls (menu-bar clock,
+        # terminal spinner) — locate followed by mark must not pay a second
+        # multi-second inference for a few changed pixels.
+        locator = StubLocator([self.COARSE], [self.FINE_IN_CROP])
+        computer = self.build(locator, clock=lambda: 100.0)
+
+        first = computer.locate_object("field", mode="first")
+        calls_after_first = computer.inference_calls
+        nearly = Image.new("RGB", self.SCREEN)
+        nearly.paste(Image.new("RGB", (60, 16), "white"), (1820, 4))  # the clock ticked
+        second = computer.locate_object("field", mode="first", screenshot=nearly)
+
+        self.assertEqual(first, second)
+        self.assertEqual(computer.inference_calls, calls_after_first)
+
+    def test_the_fuzzy_reuse_expires_with_the_cache_ttl(self):
+        now = {"t": 100.0}
+        locator = StubLocator([self.COARSE], [self.FINE_IN_CROP])
+        computer = self.build(locator, clock=lambda: now["t"])
+        computer.locate_object("field", mode="first")
+        calls_after_first = computer.inference_calls
+
+        now["t"] = 100.0 + computer.cache_ttl + 1
+        nearly = Image.new("RGB", self.SCREEN)
+        nearly.paste(Image.new("RGB", (60, 16), "white"), (1820, 4))
+        computer.locate_object("field", mode="first", screenshot=nearly)
+
+        self.assertGreater(computer.inference_calls, calls_after_first)
+
+    def test_screen_similarity_tolerates_small_changes_only(self):
+        from src.llm.tools.computer.detection import screen_thumbnail, screens_roughly_equal
+
+        base = Image.new("RGB", (1920, 1080))
+        ticked = base.copy()
+        ticked.paste(Image.new("RGB", (60, 16), "white"), (1820, 4))
+        scrolled = Image.new("RGB", (1920, 1080), "white")
+
+        self.assertTrue(screens_roughly_equal(screen_thumbnail(base), screen_thumbnail(ticked)))
+        self.assertFalse(screens_roughly_equal(screen_thumbnail(base), screen_thumbnail(scrolled)))
+        portrait = Image.new("RGB", (1080, 1920))  # different aspect → different thumb size
+        self.assertFalse(screens_roughly_equal(screen_thumbnail(base), screen_thumbnail(portrait)))
+
+    def test_a_resolution_change_never_reuses_boxes(self):
+        # Cached boxes are in the old capture's pixel space; even a visually
+        # identical screen at another resolution must re-locate.
+        locator = StubLocator([self.COARSE], [self.FINE_IN_CROP])
+        computer = self.build(locator, clock=lambda: 100.0)
+        computer.locate_object("field", mode="first")
+        calls_after_first = computer.inference_calls
+
+        smaller = Image.new("RGB", (1280, 720))  # same aspect, same black content
+        computer.locate_object("field", mode="first", screenshot=smaller)
+
+        self.assertGreater(computer.inference_calls, calls_after_first)
+
     def test_the_cache_can_be_switched_off(self):
         locator = StubLocator([self.COARSE], [self.FINE_IN_CROP])
         computer = self.build(locator, cache_detections=False)

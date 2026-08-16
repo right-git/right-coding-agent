@@ -1,11 +1,37 @@
 import re
 from collections.abc import Sequence
 
-from PIL import Image
+from PIL import Image, ImageChops, ImageStat
 
 from .types import Box, Detection, Point, Size, TargetMode
 
 NORMALIZED_SCALE = 1000
+THUMBNAIL_SIDE = 64
+SCREEN_SIMILARITY_TOLERANCE = 3.0  # mean abs pixel diff on the thumbnail, 0..255
+
+
+def screen_thumbnail(image: Image.Image, side: int = THUMBNAIL_SIDE) -> Image.Image:
+    """A tiny grayscale of the screen, cheap to compare for near-equality."""
+    height = max(1, round(side * image.height / image.width))
+    return image.convert("L").resize((side, height))
+
+
+def screens_roughly_equal(
+    thumb_a: Image.Image,
+    thumb_b: Image.Image,
+    tolerance: float = SCREEN_SIMILARITY_TOLERANCE,
+) -> bool:
+    """Whether two screen thumbnails differ only by small local changes.
+
+    A live desktop is never byte-identical between two captures — the menu-bar
+    clock and terminal spinners always tick — but those change a fraction of a
+    percent of pixels, while a scroll or window move shifts most of them.
+    """
+    if thumb_a.size != thumb_b.size:
+        return False
+    difference = ImageChops.difference(thumb_a, thumb_b)
+    return ImageStat.Stat(difference).mean[0] <= tolerance
+
 
 _TOKEN_PATTERN = re.compile(
     r"<ref>(?P<label>(?:(?!<ref>|<box>).)*?)</ref>" r"|(?P<box><box>(?:(?!<ref>|<box>).)*?</box>)",

@@ -21,6 +21,8 @@ from .detection import (
     expand_box,
     inference_scale,
     needs_refinement,
+    screen_thumbnail,
+    screens_roughly_equal,
     select_targets,
     shift_box,
 )
@@ -78,6 +80,8 @@ class ComputerUse:
         min_target_px: int = MIN_TARGET_PX,
         refine_limit: int = REFINE_LIMIT,
         cache_detections: bool = True,
+        cache_ttl: float = 15.0,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         if dpi_aware:
             platforms.enable_dpi_awareness()
@@ -95,12 +99,17 @@ class ComputerUse:
         self.min_target_px = min_target_px
         self.refine_limit = refine_limit
         self.cache_detections = cache_detections
+        self.cache_ttl = cache_ttl
+        self._clock = clock or time.monotonic
 
         self.last_screenshot: Image.Image | None = None
         self.last_detections: list[Detection] = []
         self.inference_calls = 0
         self._cache: dict[tuple, list[Detection]] = {}
         self._cache_key: bytes | None = None
+        self._cache_thumb: Image.Image | None = None
+        self._cache_size: tuple[int, int] | None = None  # boxes live in this pixel space
+        self._cache_time = 0.0
 
     # ------------------------------------------------------------------ setup
 
@@ -244,6 +253,7 @@ class ComputerUse:
         the neighbourhood is already known (an app window, a panel found
         earlier). Small targets are located twice; see the class docstring.
         """
+        started = time.perf_counter()
         image = screenshot if screenshot is not None else self.get_screenshot()
         self.last_screenshot = image
 
@@ -275,9 +285,10 @@ class ComputerUse:
         self.last_detections = detections
         self._store(image, cache_key, detections)
         logger.info(
-            "Located [{}] region(s) for description [{}]",
+            "Located [{}] region(s) for description [{}] in [{:.1f}s]",
             len(detections),
             description,
+            time.perf_counter() - started,
         )
 
         if annotate_to is not None:
@@ -292,12 +303,28 @@ class ComputerUse:
         return hashlib.blake2b(image.tobytes(), digest_size=16).digest()
 
     def _lookup(self, image: Image.Image, key: tuple) -> list[Detection] | None:
-        """Reuse a result only when the screen is byte-identical to last time."""
+        """Reuse a result while the screen is byte-identical — or, within
+        `cache_ttl` seconds of the last inference, merely near-identical.
+
+        A live desktop never stays byte-identical between two captures (the
+        menu-bar clock and terminal spinners always tick), and on CPU/MPS a
+        full locate costs many seconds — so a locate followed by a mark or a
+        click must not pay twice for a few changed pixels. Big changes (a
+        scroll, a moved window) still miss, and the TTL runs from the last
+        real inference, so fuzzy hits cannot chain stale results forever.
+        """
         if not self.cache_detections:
             return None
-        if self._digest(image) != self._cache_key:
-            return None
-        return self._cache.get(key)
+        if self._digest(image) == self._cache_key:
+            return self._cache.get(key)
+        if (
+            self._cache_thumb is not None
+            and image.size == self._cache_size  # boxes are in the old capture's pixel space
+            and self._clock() - self._cache_time <= self.cache_ttl
+            and screens_roughly_equal(screen_thumbnail(image), self._cache_thumb)
+        ):
+            return self._cache.get(key)
+        return None
 
     def _store(self, image: Image.Image, key: tuple, detections: list[Detection]) -> None:
         if not self.cache_detections:
@@ -306,6 +333,9 @@ class ComputerUse:
         if digest != self._cache_key:
             self._cache_key = digest
             self._cache = {}
+        self._cache_thumb = screen_thumbnail(image)
+        self._cache_size = image.size
+        self._cache_time = self._clock()
         self._cache[key] = list(detections)
 
     def find_object(

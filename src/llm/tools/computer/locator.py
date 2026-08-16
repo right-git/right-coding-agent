@@ -1,3 +1,4 @@
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -177,20 +178,28 @@ class LocateAnythingLocator:
         self._runtime = runtime
         self._loader = loader
         self._warmup = warmup
+        self._load_lock = threading.Lock()
 
     @property
     def is_loaded(self) -> bool:
         return self._runtime is not None
 
     def load(self) -> InferenceRuntime:
+        # Single-flight: the startup preload and the first screen tool used to
+        # race here and load the 7 GB model TWICE — a swap storm on a 16 GB
+        # machine. The second caller now waits for the first load instead.
         if self._runtime is None:
-            # Loading and warm-up spew library warnings and progress bars;
-            # they run on background threads, so mute this thread only.
-            with silenced():
-                quiet_transformers()
-                self._runtime = self._loader()
-                if self._warmup:
-                    self.warm_up(self._runtime)
+            with self._load_lock:
+                if self._runtime is None:
+                    # Loading and warm-up spew library warnings and progress
+                    # bars; they run on background threads, so mute this
+                    # thread only.
+                    with silenced():
+                        quiet_transformers()
+                        runtime = self._loader()
+                        if self._warmup:
+                            self.warm_up(runtime)
+                        self._runtime = runtime
         return self._runtime
 
     def warm_up(self, runtime: InferenceRuntime) -> None:
