@@ -46,7 +46,7 @@ Prep: open any app with a settings button.
 > I can't find the settings button in this window. Show me where it is and
 > explain what clicking it does.
 
-Single screen_mark; control task for overhead on trivial asks.
+Single screen_locate with mark=True; control task for overhead on trivial asks.
 
 ## 6. Polling — predicted: meta (large margin)
 

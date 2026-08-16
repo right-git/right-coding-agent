@@ -26,6 +26,10 @@ class Settings(BaseSettings):
         default="google/gemini-3.7-flash",
         description="Model the chat starts with; any provider-prefixed id.",
     )
+    vision_quantization: str = Field(
+        default="none",
+        description="Vision locator weight quantization: 'none' (fp16/bf16) or 'int8' (halves memory).",
+    )
     voice_ptt_key: str = Field(
         default="alt_r",
         description="Push-to-talk toggle key: a pynput key name (alt_r, f8, pause) or a single character.",

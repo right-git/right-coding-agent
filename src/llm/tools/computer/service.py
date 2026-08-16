@@ -21,6 +21,7 @@ from .detection import (
     expand_box,
     inference_scale,
     needs_refinement,
+    parse_region,
     screen_thumbnail,
     screens_roughly_equal,
     select_targets,
@@ -242,13 +243,14 @@ class ComputerUse:
         *,
         screenshot: Image.Image | None = None,
         mode: TargetMode = "all",
-        region: Box | None = None,
+        region: Box | str | None = None,
         refine: bool = True,
         annotate_to: str | Path | None = None,
     ) -> list[Detection]:
         """Find every region matching `description` on a fresh screenshot.
 
-        `region` limits the search to part of the screen, which is both faster
+        `region` (a pixel box, or a `parse_region` name like "top-bar")
+        limits the search to part of the screen, which is both faster
         and more accurate than searching the whole display — pass it whenever
         the neighbourhood is already known (an app window, a panel found
         earlier). Small targets are located twice; see the class docstring.
@@ -256,6 +258,10 @@ class ComputerUse:
         started = time.perf_counter()
         image = screenshot if screenshot is not None else self.get_screenshot()
         self.last_screenshot = image
+        if isinstance(region, str):
+            # Named areas ("top-bar", "bottom-right") or "l,t,r,b" pixels;
+            # resolved against this capture so the cache key holds the box.
+            region = parse_region(region, image.size)
 
         cache_key = (description, region, mode, refine)
         cached = self._lookup(image, cache_key)

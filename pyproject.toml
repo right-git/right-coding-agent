@@ -19,6 +19,7 @@ dependencies = [
     "mss>=10.2.0",
     "numpy>=2.4.4",
     "opencv-python-headless>=5.0.0.93",
+    "optimum-quanto>=0.2.7",
     "peft>=0.20.0",
     "pillow==11.1.0",
     "prompt-toolkit>=3.0.52",

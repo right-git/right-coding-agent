@@ -311,7 +311,6 @@ class DefaultRegistryTests(unittest.TestCase):
                 "bash",
                 "screen_locate",
                 "screen_screenshot",
-                "screen_mark",
                 "screen_click",
                 "screen_type",
                 "screen_key",

@@ -13,7 +13,6 @@ from src.llm.tools.computer import (
     screen_click,
     screen_key,
     screen_locate,
-    screen_mark,
     screen_scroll,
     screen_type,
     set_activity_listener,
@@ -66,7 +65,6 @@ class ComputerToolTests(unittest.IsolatedAsyncioTestCase):
             [
                 "screen_locate",
                 "screen_screenshot",
-                "screen_mark",
                 "screen_click",
                 "screen_type",
                 "screen_key",
@@ -94,23 +92,45 @@ class ComputerToolTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, "No matching region was found on the screen.")
 
-    async def test_mark_points_at_the_element_and_keeps_the_note(self):
+    async def test_locate_with_mark_finds_and_points_in_one_call(self):
+        # Marking is part of locating: one inference finds the element AND
+        # shows it — a separate mark tool used to re-run the whole locate.
         self.install([[Detection("render button", (10, 20, 30, 40))]])
 
-        result = await screen_mark.ainvoke({"description": "кнопка рендера", "note": "Запускает просчёт"})
+        result = await screen_locate.ainvoke(
+            {"description": "кнопка рендера", "mark": True, "note": "Запускает просчёт"}
+        )
 
         self.assertIn("render button", result)
+        self.assertIn("box=(10, 20, 30, 40)", result)  # locate report stays
+        self.assertIn("Marked", result)
         self.assertIn("(20, 30)", result)
         self.assertEqual(self.pointer.moves, [(20, 30)])
         self.assertEqual(self.pointer.clicks, [])
         self.assertEqual(self.overlay.markers[0].note, "Запускает просчёт")
 
+    async def test_a_note_alone_counts_as_marking_intent(self):
+        self.install([[Detection("render button", (10, 20, 30, 40))]])
+
+        await screen_locate.ainvoke({"description": "render", "note": "Запускает просчёт"})
+
+        self.assertEqual(len(self.overlay.markers), 1)
+
+    async def test_locate_without_mark_never_touches_the_screen(self):
+        self.install([[Detection("render button", (10, 20, 30, 40))]])
+
+        await screen_locate.ainvoke({"description": "render"})
+
+        self.assertEqual(self.overlay.markers, [])
+        self.assertEqual(self.pointer.moves, [])
+
     async def test_mark_uses_the_supplied_title_as_the_tooltip_heading(self):
         self.install([[Detection("the render button in the export panel", (10, 20, 30, 40))]])
 
-        await screen_mark.ainvoke(
+        await screen_locate.ainvoke(
             {
                 "description": "кнопка рендера в панели экспорта",
+                "mark": True,
                 "note": "Запускает просчёт",
                 "title": "Кнопка Render",
             }
@@ -121,14 +141,14 @@ class ComputerToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_mark_falls_back_to_the_detected_label_without_a_title(self):
         self.install([[Detection("render button", (10, 20, 30, 40))]])
 
-        await screen_mark.ainvoke({"description": "render", "note": "n"})
+        await screen_locate.ainvoke({"description": "render", "mark": True, "note": "n"})
 
         self.assertEqual(self.overlay.markers[0].title, "render button")
 
     async def test_mark_says_so_when_nothing_matches(self):
         self.install([[]])
 
-        result = await screen_mark.ainvoke({"description": "ghost", "note": "n"})
+        result = await screen_locate.ainvoke({"description": "ghost", "mark": True, "note": "n"})
 
         self.assertEqual(result, "Nothing on screen matched: ghost")
         self.assertEqual(self.overlay.markers, [])
@@ -190,7 +210,7 @@ class ComputerToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_mark_refuses_ambiguous_descriptions(self):
         self.install_two_inputs()
 
-        result = await screen_mark.ainvoke({"description": "input field", "note": "n"})
+        result = await screen_locate.ainvoke({"description": "input field", "mark": True, "note": "n"})
 
         self.assertIn("Did not mark: 2 elements matched", result)
         self.assertEqual(self.overlay.markers, [])
@@ -198,10 +218,35 @@ class ComputerToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_mark_match_picks_one_of_several(self):
         self.install_two_inputs()
 
-        result = await screen_mark.ainvoke({"description": "input field", "note": "n", "match": 1})
+        result = await screen_locate.ainvoke({"description": "input field", "mark": True, "note": "n", "match": 1})
 
         self.assertIn("Marked 'address bar'", result)
         self.assertEqual(self.overlay.markers[0].title, "address bar")
+
+    async def test_locate_accepts_a_named_region(self):
+        # 200x100 screen, "bottom-right" third starts at (133, 66); the
+        # scripted detection is in crop coordinates and must map back.
+        self.install([[Detection("wifi icon", (10, 5, 20, 15))]])
+
+        result = await screen_locate.ainvoke({"description": "wifi icon", "region": "bottom-right"})
+
+        self.assertIn("box=(143, 71, 153, 81)", result)
+
+    async def test_locate_rejects_an_unknown_region_with_the_vocabulary(self):
+        self.install([[Detection("x", (0, 0, 5, 5))]])
+
+        result = await screen_locate.ainvoke({"description": "x", "region": "nowhere"})
+
+        self.assertIn("Tool call failed", result)
+        self.assertIn("top-bar", result)  # the error teaches the valid names
+
+    async def test_click_accepts_a_region(self):
+        self.install([[Detection("ok", (10, 5, 20, 15))]])
+
+        result = await screen_click.ainvoke({"description": "ok", "region": "bottom-right"})
+
+        self.assertIn("Clicked 'ok'", result)
+        self.assertEqual(self.pointer.moves[-1], (148, 76))
 
     async def test_typing_scrolling_and_shortcuts_reach_the_pointer(self):
         self.install([[]])

@@ -915,7 +915,42 @@ class TwoStageLocateTests(unittest.TestCase):
         portrait = Image.new("RGB", (1080, 1920))  # different aspect → different thumb size
         self.assertFalse(screens_roughly_equal(screen_thumbnail(base), screen_thumbnail(portrait)))
 
-    def test_a_resolution_change_never_reuses_boxes(self):
+    def test_named_regions_map_to_screen_boxes(self):
+        from src.llm.tools.computer.detection import parse_region
+
+        size = (3000, 2000)
+        self.assertEqual(parse_region("top-left", size), (0, 0, 1000, 666))
+        self.assertEqual(parse_region("bottom-right", size), (2000, 1333, 3000, 2000))
+        self.assertEqual(parse_region("center", size), (1000, 666, 2000, 1333))
+        self.assertEqual(parse_region("top-bar", size), (0, 0, 3000, 300))
+        self.assertEqual(parse_region("bottom-bar", size), (0, 1700, 3000, 2000))
+        self.assertEqual(parse_region("left-bar", size), (0, 0, 450, 2000))
+        self.assertEqual(parse_region("right-bar", size), (2550, 0, 3000, 2000))
+
+    def test_numeric_regions_parse_and_clamp(self):
+        from src.llm.tools.computer.detection import parse_region
+
+        self.assertEqual(parse_region("100, 50, 900, 700", (1000, 800)), (100, 50, 900, 700))
+        self.assertEqual(parse_region("-50,0,5000,900", (1000, 800)), (0, 0, 1000, 800))
+        self.assertIsNone(parse_region("", (1000, 800)))
+        self.assertIsNone(parse_region(None, (1000, 800)))
+
+    def test_unknown_region_names_raise_with_the_vocabulary(self):
+        from src.llm.tools.computer.detection import parse_region
+
+        with self.assertRaisesRegex(ValueError, "top-bar"):
+            parse_region("nowhere", (1000, 800))
+        with self.assertRaisesRegex(ValueError, "l,t,r,b"):
+            parse_region("1,2,3", (1000, 800))
+
+    def test_locate_accepts_a_region_spec_string(self):
+        locator = StubLocator([(10, 5, 20, 15)])
+        computer = self.build(locator)
+
+        detections = computer.locate_object("icon", mode="first", region="bottom-right", refine=False)
+
+        # bottom-right third of 1920x1080 starts at (1280, 720)
+        self.assertEqual(detections[0].box, (1290, 725, 1300, 735))
         # Cached boxes are in the old capture's pixel space; even a visually
         # identical screen at another resolution must re-locate.
         locator = StubLocator([self.COARSE], [self.FINE_IN_CROP])

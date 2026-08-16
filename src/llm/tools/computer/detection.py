@@ -10,6 +10,52 @@ THUMBNAIL_SIDE = 64
 SCREEN_SIMILARITY_TOLERANCE = 3.0  # mean abs pixel diff on the thumbnail, 0..255
 
 
+REGION_STRIP_FRACTION = 0.15
+_REGION_NUMBERS = re.compile(r"^\s*(-?\d+)\s*[,;\s]\s*(-?\d+)\s*[,;\s]\s*(-?\d+)\s*[,;\s]\s*(-?\d+)\s*$")
+
+
+def region_names() -> list[str]:
+    """The named-region vocabulary understood by `parse_region`."""
+    cells = [f"{row}-{column}" for row in ("top", "middle", "bottom") for column in ("left", "center", "right")]
+    return cells + ["center", "top-bar", "bottom-bar", "left-bar", "right-bar"]
+
+
+def parse_region(spec: str | None, screen_size: Size) -> Box | None:
+    """A region spec string → pixel box on this screen, or None for "everywhere".
+
+    Accepts the 3x3 grid the locator's own reports use ("top-right",
+    "middle-center", plain "center"), thin edge strips for bars and docks
+    ("top-bar", "bottom-bar", "left-bar", "right-bar"), or explicit pixels
+    "l,t,r,b" in the same coordinate space locate results are reported in.
+    Unknown specs raise ValueError naming the vocabulary, so a tool error
+    teaches the caller the valid forms.
+    """
+    if not spec:
+        return None
+    width, height = screen_size
+    text = str(spec).strip().lower()
+
+    numbers = _REGION_NUMBERS.match(text)
+    if numbers:
+        return clamp_box(tuple(int(value) for value in numbers.groups()), screen_size)
+
+    columns = {"left": (0, width // 3), "center": (width // 3, 2 * width // 3), "right": (2 * width // 3, width)}
+    rows = {"top": (0, height // 3), "middle": (height // 3, 2 * height // 3), "bottom": (2 * height // 3, height)}
+    named: dict[str, Box] = {
+        f"{row}-{column}": (x1, y1, x2, y2) for row, (y1, y2) in rows.items() for column, (x1, x2) in columns.items()
+    }
+    named["center"] = named["middle-center"]
+    strip_width, strip_height = round(width * REGION_STRIP_FRACTION), round(height * REGION_STRIP_FRACTION)
+    named["top-bar"] = (0, 0, width, strip_height)
+    named["bottom-bar"] = (0, height - strip_height, width, height)
+    named["left-bar"] = (0, 0, strip_width, height)
+    named["right-bar"] = (width - strip_width, 0, width, height)
+
+    if text in named:
+        return named[text]
+    raise ValueError(f"Unknown region {spec!r}; use one of {', '.join(region_names())}, or pixel bounds 'l,t,r,b'")
+
+
 def screen_thumbnail(image: Image.Image, side: int = THUMBNAIL_SIDE) -> Image.Image:
     """A tiny grayscale of the screen, cheap to compare for near-equality."""
     height = max(1, round(side * image.height / image.width))

@@ -87,6 +87,30 @@ class ConcurrentLoadTests(unittest.TestCase):
         self.assertEqual(results, ["runtime"] * 4)
 
 
+class QuantizationTests(unittest.TestCase):
+    def test_none_mode_returns_the_model_untouched(self):
+        model = object()
+        quantizer = Mock()
+
+        result = locator_module.apply_quantization(model, "none", quantizer=quantizer)
+
+        self.assertIs(result, model)
+        quantizer.assert_not_called()
+
+    def test_int8_mode_runs_the_quantizer_once(self):
+        model = object()
+        quantizer = Mock()
+
+        result = locator_module.apply_quantization(model, "int8", quantizer=quantizer)
+
+        self.assertIs(result, model)
+        quantizer.assert_called_once_with(model)
+
+    def test_unknown_modes_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "int8"):
+            locator_module.apply_quantization(object(), "int3", quantizer=Mock())
+
+
 class InferenceRequestTests(unittest.TestCase):
     def test_gui_description_is_wrapped_in_the_model_prompt(self):
         prompt = locator_module.build_gui_prompt("outline button")

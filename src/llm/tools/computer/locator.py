@@ -109,15 +109,53 @@ def resolve_runtime_source(source: str, predownload=None) -> str:
         return source
 
 
+def configured_quantization() -> str:
+    """The VISION_QUANTIZATION setting; "none" when settings are unavailable."""
+    try:
+        from src.config.settings import settings
+
+        return settings.vision_quantization
+    except Exception:
+        return "none"
+
+
+def apply_quantization(model, mode: str, quantizer=None):
+    """Shrink the model's weights in place per `mode` ("none" or "int8").
+
+    int8 weight-only halves the ~7 GB fp16 footprint — on a 16 GB Mac the
+    difference between MPS paging and not. Runs on the CPU copy BEFORE the
+    move to the device. `quantizer` is the test seam; the default uses
+    optimum-quanto (device-agnostic, works on the custom remote code).
+    """
+    if mode in ("", "none"):
+        return model
+    if mode != "int8":
+        raise ValueError(f"Unknown vision quantization {mode!r}; use 'none' or 'int8'")
+    if quantizer is None:
+
+        def quantizer(target):
+            from optimum.quanto import freeze, qint8, quantize
+
+            quantize(target, weights=qint8)
+            freeze(target)
+
+    logger.info("Quantizing the vision model weights to int8")
+    quantizer(model)
+    return model
+
+
 def load_runtime() -> InferenceRuntime:
     device, dtype = select_inference_device()
     source = resolve_runtime_source(MODEL)
+    quantization = configured_quantization()
     # The remote code's dylibs (cv2) print objc duplicate-class noise straight
     # to fd 2 on macOS; silenced() cannot catch that, only an fd-level mute.
     with suppress_native_stderr():
         tokenizer = AutoTokenizer.from_pretrained(source, trust_remote_code=True)
         processor = AutoProcessor.from_pretrained(source, trust_remote_code=True)
-        model = AutoModel.from_pretrained(source, dtype=dtype, trust_remote_code=True).to(device).eval()
+        model = AutoModel.from_pretrained(source, dtype=dtype, trust_remote_code=True)
+        model = apply_quantization(model, quantization)
+        model = model.to(device).eval()
     return InferenceRuntime(tokenizer, processor, model, device, dtype)
 
 
