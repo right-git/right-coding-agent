@@ -111,6 +111,8 @@ class ChatUI:
             try:
                 from src.config.settings import settings
 
+                if not settings.enable_voice_model:
+                    return "voice off — set ENABLE_VOICE_MODEL=1 in .env for push-to-talk and spoken replies"
                 key = settings.voice_ptt_key
             except Exception:
                 key = "alt_r"
@@ -129,7 +131,11 @@ class ChatUI:
         return self.voice is not None and self.voice.speak_replies
 
     def start_voice_input(self) -> None:
-        """Start always-on push-to-talk; called once at REPL startup."""
+        """Start always-on push-to-talk; refused while ENABLE_VOICE_MODEL is off."""
+        from src.config.settings import settings
+
+        if not settings.enable_voice_model:
+            raise RuntimeError("voice is disabled — set ENABLE_VOICE_MODEL=1 in .env and restart")
         if self.voice is None:
             from src.ui.voice import VoiceController
 
@@ -139,6 +145,8 @@ class ChatUI:
     def set_voice_replies(self, on: bool) -> None:
         """`/voice on|off`: whether replies are spoken; push-to-talk stays on."""
         if self.voice is None:
+            if not on:
+                return  # nothing to silence, and no reason to start the models
             self.start_voice_input()  # retry input too if startup failed
         self.voice.set_speaking(on)
 

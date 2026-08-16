@@ -90,7 +90,15 @@ ENV=dev
 LLM_API_KEY=<your key>
 LLM_API_BASE=<OpenAI-compatible endpoint, e.g. https://openrouter.ai/api/v1>
 LLM_DEFAULT_MODEL=google/gemini-3.7-flash   # optional: the model the chat starts with
+ENABLE_VISION_MODEL=1   # optional: screen_locate/screen_click + the LocateAnything locator (multi-GB)
+ENABLE_VOICE_MODEL=1    # optional: push-to-talk ASR (whisper) + spoken replies (Silero)
 ```
+
+The heavy local models are **opt-in**: with the flags unset nothing downloads or
+loads at startup. Without `ENABLE_VISION_MODEL` the locator-driven screen tools
+(`screen_locate`, `screen_click`) are not registered at all — screenshots,
+typing, keys, and scrolling keep working; without `ENABLE_VOICE_MODEL` the
+voice layer (push-to-talk, `/voice`) stays off.
 
 ### Verify the install
 
@@ -128,12 +136,13 @@ the production agent, then compare the usage footers — see
 - `/temperature <0..2|none>` (alias `/temp`) — show or change the sampling temperature;
 - `/paste` — attach an image from the clipboard to your next message (a screenshot, a copied picture, or a copied image file); in terminals that forward the key, plain **Ctrl+V** in the input does the same and inserts an `[image N]` placeholder;
 - `/sound [on|off]` — toggle the completion sound played when a turn finishes (`assets/sounds/done.mp3`);
-- `/voice [on|off]` — whether the agent speaks its replies (push-to-talk input is always on);
+- `/voice [on|off]` — whether the agent speaks its replies (needs `ENABLE_VOICE_MODEL=1`; push-to-talk input is always on then);
 - `/log-level [name]`, `/clear`, `/help`, `/quit`.
 
 ### Voice
 
-**Push-to-talk is always on.** Press **right Alt** (configurable via
+**Push-to-talk is always on once `ENABLE_VOICE_MODEL=1` is set in `.env`**
+(off by default so the ASR model never loads unasked). Press **right Alt** (configurable via
 `VOICE_PTT_KEY` in `.env` — any pynput key name such as `f8`, or a single
 character) anywhere, even with another window focused: recording starts and the
 prompt shows a live stopwatch with a draft of what you said. Press the key again —

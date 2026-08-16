@@ -26,6 +26,16 @@ class Settings(BaseSettings):
         default="google/gemini-3.7-flash",
         description="Model the chat starts with; any provider-prefixed id.",
     )
+    enable_vision_model: bool = Field(
+        default=False,
+        description="Register the locator-driven screen tools (screen_locate, screen_click) and preload the "
+        "LocateAnything vision model. Off by default so the multi-GB model never loads.",
+    )
+    enable_voice_model: bool = Field(
+        default=False,
+        description="Start push-to-talk and load the speech models (whisper ASR, Silero TTS). "
+        "Off by default so no ASR model loads at startup.",
+    )
     vision_quantization: str = Field(
         default="none",
         description="Vision locator weight quantization: 'none' (fp16/bf16) or 'int8' (halves memory).",

@@ -84,8 +84,35 @@ class MainStartupTests(unittest.IsolatedAsyncioTestCase):
             patch("src.main.preload_vision_model"),
             patch("src.llm.tools.computer.set_activity_listener"),
             patch("src.llm.agents.Agents", return_value=Mock()),
+            patch.object(main_module.settings, "enable_voice_model", True),
         ):
             with self.assertRaises(SystemExit):
                 await main_module.main()
 
         ui.print_warning.assert_any_call("needs the macOS Accessibility permission")
+
+    async def test_voice_startup_is_skipped_while_disabled(self):
+        # ENABLE_VOICE_MODEL off (the default) must not touch the voice layer
+        # at all — no hotkey listener, no whisper warm-up.
+        from src import main as main_module
+
+        ui = Mock()
+        ui.model = "openai/gpt-5.1-codex-mini"
+        ui.get_input = AsyncMock(return_value="/quit")
+        ui.handle_command = Mock(side_effect=SystemExit(0))
+
+        catalog = Mock()
+        catalog.models = AsyncMock(return_value={})
+
+        with (
+            patch("src.main.ChatUI", return_value=ui),
+            patch("src.main.OpenRouterCatalog", return_value=catalog),
+            patch("src.main.preload_vision_model"),
+            patch("src.llm.tools.computer.set_activity_listener"),
+            patch("src.llm.agents.Agents", return_value=Mock()),
+            patch.object(main_module.settings, "enable_voice_model", False),
+        ):
+            with self.assertRaises(SystemExit):
+                await main_module.main()
+
+        ui.start_voice_input.assert_not_called()

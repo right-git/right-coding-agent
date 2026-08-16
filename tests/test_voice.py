@@ -1311,10 +1311,11 @@ class VoiceUiTests(unittest.TestCase):
     def test_vision_preload_reports_model_status(self):
         from unittest.mock import Mock
 
+        from src.config.settings import settings
         from src.main import preload_vision_model
 
         ui = Mock()
-        with patch("src.llm.tools.warm_up_computer"):
+        with patch.object(settings, "enable_vision_model", True), patch("src.llm.tools.warm_up_computer"):
             preload_vision_model(ui)
 
         ui.set_model_status.assert_any_call("vision", "loading")
@@ -1323,14 +1324,33 @@ class VoiceUiTests(unittest.TestCase):
     def test_vision_preload_forwards_download_progress(self):
         from unittest.mock import Mock
 
+        from src.config.settings import settings
         from src.main import preload_vision_model
         from src.utils.downloads import report_progress
 
         ui = Mock()
-        with patch("src.llm.tools.warm_up_computer", side_effect=lambda: report_progress("↓ 2/7 GB 29%")):
+        with (
+            patch.object(settings, "enable_vision_model", True),
+            patch("src.llm.tools.warm_up_computer", side_effect=lambda: report_progress("↓ 2/7 GB 29%")),
+        ):
             preload_vision_model(ui)
 
         ui.set_model_status.assert_any_call("vision", "loading", "↓ 2/7 GB 29%")
+
+    def test_vision_preload_skips_when_disabled(self):
+        # ENABLE_VISION_MODEL off (the default): the preload must not touch
+        # the model or the status line at all.
+        from unittest.mock import Mock
+
+        from src.config.settings import settings
+        from src.main import preload_vision_model
+
+        ui = Mock()
+        with patch.object(settings, "enable_vision_model", False), patch("src.llm.tools.warm_up_computer") as warm:
+            preload_vision_model(ui)
+
+        warm.assert_not_called()
+        ui.set_model_status.assert_not_called()
 
     def test_voice_command_toggles_spoken_replies(self):
         from src.ui.chat import ChatUI
@@ -1344,6 +1364,26 @@ class VoiceUiTests(unittest.TestCase):
         with patch.object(ChatUI, "set_voice_replies") as replies:
             ui.handle_command("/voice")
         replies.assert_called_once_with(False)
+
+    def test_voice_replies_refused_while_voice_models_disabled(self):
+        from src.config.settings import settings
+        from src.ui.chat import ChatUI
+
+        ui = ChatUI(model="m")
+        with patch.object(settings, "enable_voice_model", False):
+            with self.assertRaises(RuntimeError):
+                ui.set_voice_replies(True)
+            ui.set_voice_replies(False)  # no controller and nothing to silence — a no-op
+
+        self.assertIsNone(ui.voice)
+
+    def test_welcome_line_explains_disabled_voice(self):
+        from src.config.settings import settings
+        from src.ui.chat import ChatUI
+
+        ui = ChatUI(model="m")
+        with patch.object(settings, "enable_voice_model", False):
+            self.assertIn("ENABLE_VOICE_MODEL", ui._voice_welcome_line())
 
 
 if __name__ == "__main__":

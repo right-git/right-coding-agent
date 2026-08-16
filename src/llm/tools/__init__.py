@@ -21,7 +21,7 @@ from .computer.tool import (
 )
 from .files.tool import FILE_TOOLS, edit_file, glob_files, grep_files, read_file, write_file
 from .meta.attachments import attach_image, collecting_images
-from .meta.defaults import get_registry, set_registry
+from .meta.defaults import default_tools, get_registry, set_registry
 from .meta.registry import RESERVED_SCRIPT_NAMES, ToolRegistry
 from .meta.tool import (
     MAX_ATTACHED_IMAGES,
@@ -45,6 +45,7 @@ __all__ = [
     "attach_image",
     "bash",
     "collecting_images",
+    "default_tools",
     "edit_file",
     "get_computer",
     "get_registry",

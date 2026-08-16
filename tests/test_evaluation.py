@@ -11,9 +11,9 @@ from evaluation.direct_tools import (
     DIRECT_TOOLS,
     schema_token_estimate,
 )
-from src.llm.tools.computer import screen_click, set_computer
+from src.llm.tools.computer import screen_screenshot, set_computer
 from src.llm.middlewares.message_log import MessageLogMiddleware
-from src.llm.tools import META_TOOLS
+from src.llm.tools import META_TOOLS, default_tools
 from src.llm.types import LLMProvider
 from src.llm.tools.computer import ComputerUse, NullOverlay
 from src.llm.tools.computer.fakes import (
@@ -22,22 +22,9 @@ from src.llm.tools.computer.fakes import (
     StaticScreen,
 )
 
-EXPECTED_DIRECT_NAMES = [
-    "web_fetch",
-    "web_search",
-    "read_file",
-    "write_file",
-    "edit_file",
-    "glob_files",
-    "grep_files",
-    "bash",
-    "screen_locate",
-    "screen_screenshot",
-    "screen_click",
-    "screen_type",
-    "screen_key",
-    "screen_scroll",
-]
+# The direct surface must mirror the default registry exactly, including the
+# ENABLE_VISION_MODEL gate, or the architecture comparison stops being fair.
+EXPECTED_DIRECT_NAMES = [tool_obj.name for tool_obj in default_tools()]
 
 
 class DirectToolsTests(unittest.TestCase):
@@ -45,10 +32,10 @@ class DirectToolsTests(unittest.TestCase):
         self.assertEqual([tool_obj.name for tool_obj in DIRECT_TOOLS], EXPECTED_DIRECT_NAMES)
 
     def test_wrappers_keep_the_original_schema_and_description(self):
-        wrapped = next(t for t in DIRECT_TOOLS if t.name == "screen_click")
+        wrapped = next(t for t in DIRECT_TOOLS if t.name == "screen_screenshot")
 
-        self.assertEqual(wrapped.description, screen_click.description)
-        self.assertEqual(wrapped.args, screen_click.args)
+        self.assertEqual(wrapped.description, screen_screenshot.description)
+        self.assertEqual(wrapped.args, screen_screenshot.args)
 
     def test_direct_schemas_cost_more_than_the_meta_surface(self):
         meta = schema_token_estimate(META_TOOLS)

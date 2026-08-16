@@ -17,7 +17,7 @@ from collections.abc import Sequence
 
 from langchain_core.tools import BaseTool, StructuredTool
 
-from src.llm.tools import COMPUTER_TOOLS, FILE_TOOLS, bash, collecting_images, web_fetch, web_search
+from src.llm.tools import collecting_images, default_tools
 
 
 def as_direct_tool(tool_obj: BaseTool) -> BaseTool:
@@ -37,7 +37,9 @@ def as_direct_tool(tool_obj: BaseTool) -> BaseTool:
     )
 
 
-DIRECT_TOOLS = [as_direct_tool(tool_obj) for tool_obj in [web_fetch, web_search, *FILE_TOOLS, bash, *COMPUTER_TOOLS]]
+# Built from the same default tool list as the meta registry (including the
+# ENABLE_VISION_MODEL gate), so the architecture comparison stays fair.
+DIRECT_TOOLS = [as_direct_tool(tool_obj) for tool_obj in default_tools()]
 
 
 def schema_token_estimate(tools: Sequence[BaseTool]) -> int:

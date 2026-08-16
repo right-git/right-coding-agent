@@ -296,7 +296,12 @@ class DefaultRegistryTests(unittest.TestCase):
         set_registry(None)
 
     def test_default_registry_holds_web_and_screen_tools(self):
-        names = [tool_obj.name for tool_obj in get_registry().all_tools()]
+        from unittest.mock import patch
+
+        from src.config.settings import settings
+
+        with patch.object(settings, "enable_vision_model", True):
+            names = [tool_obj.name for tool_obj in get_registry().all_tools()]
 
         self.assertEqual(
             names,
@@ -317,6 +322,22 @@ class DefaultRegistryTests(unittest.TestCase):
                 "screen_scroll",
             ],
         )
+
+    def test_vision_tools_are_left_out_unless_enabled(self):
+        # The default: the locator-driven tools are not registered at all, so
+        # nothing can pull the multi-GB vision model; the rest of the screen
+        # family (screenshot, type, key, scroll) stays available.
+        from unittest.mock import patch
+
+        from src.config.settings import settings
+
+        with patch.object(settings, "enable_vision_model", False):
+            names = [tool_obj.name for tool_obj in get_registry().all_tools()]
+
+        self.assertNotIn("screen_locate", names)
+        self.assertNotIn("screen_click", names)
+        for kept in ("screen_screenshot", "screen_type", "screen_key", "screen_scroll", "bash"):
+            self.assertIn(kept, names)
 
     def test_meta_tools_have_stable_names(self):
         self.assertEqual(

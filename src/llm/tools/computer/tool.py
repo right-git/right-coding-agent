@@ -310,3 +310,11 @@ COMPUTER_TOOLS = [
     screen_key,
     screen_scroll,
 ]
+
+# The tools that resolve a description through the LocateAnything model; the
+# default registry leaves them out unless ENABLE_VISION_MODEL is set, so a
+# plain session can never pull the multi-GB locator into memory.
+VISION_TOOLS = [
+    screen_locate,
+    screen_click,
+]

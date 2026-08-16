@@ -34,8 +34,13 @@ def preload_vision_model(ui: ChatUI | None = None) -> None:
 
     Runs in a worker thread at startup; a failure only costs the warm start,
     the locator will retry lazily on first use. Progress is reported through
-    `ui.set_model_status`, shown live at the right of the prompt.
+    `ui.set_model_status`, shown live at the right of the prompt. With
+    ENABLE_VISION_MODEL off (the default) this is a no-op — the locator tools
+    are not registered either, so nothing can load the model later.
     """
+    if not settings.enable_vision_model:
+        logger.info("Vision locator disabled (ENABLE_VISION_MODEL is off); skipping preload")
+        return
     set_status = getattr(ui, "set_model_status", None) or (lambda *_: None)
     try:
         from src.llm.tools import warm_up_computer
@@ -304,16 +309,20 @@ async def main():
     messages = []
     model = available_models[0]
     ui = ChatUI(model=model, available_models=available_models)
-    try:
-        # Push-to-talk is always on: the hotkey works from the first prompt,
-        # /voice only toggles whether replies are spoken.
-        ui.start_voice_input()
-    except PermissionError as error:
-        logger.warning("Push-to-talk permission missing: {}", error)
-        ui.print_warning(str(error))
-    except Exception:
-        logger.exception("Push-to-talk startup failed")
-        ui.print_warning("push-to-talk unavailable (see logs.log)")
+    if settings.enable_voice_model:
+        try:
+            # Push-to-talk is on whenever the voice models are enabled: the
+            # hotkey works from the first prompt, /voice only toggles whether
+            # replies are spoken.
+            ui.start_voice_input()
+        except PermissionError as error:
+            logger.warning("Push-to-talk permission missing: {}", error)
+            ui.print_warning(str(error))
+        except Exception:
+            logger.exception("Push-to-talk startup failed")
+            ui.print_warning("push-to-talk unavailable (see logs.log)")
+    else:
+        logger.info("Voice models disabled (ENABLE_VOICE_MODEL is off); push-to-talk not started")
     try:
         # The breathing screen border while the agent drives the desktop:
         # every screen tool pings the status overlay.

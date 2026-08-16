@@ -80,7 +80,7 @@ class CommandHandler:
             ("/temperature [value]", "sampling temperature 0..2, or none"),
             ("/paste", "attach an image from the clipboard (also Ctrl+V in many terminals)"),
             ("/sound [on|off]", "toggle the completion sound"),
-            ("/voice [on|off]", "spoken replies on/off (push-to-talk is always on)"),
+            ("/voice [on|off]", "spoken replies on/off (needs ENABLE_VOICE_MODEL=1)"),
             ("/check", "check macOS permissions and raise the missing consent dialogs"),
             ("/log-level [name]", "show or change the log level"),
             ("/clear", "clear screen and history"),
