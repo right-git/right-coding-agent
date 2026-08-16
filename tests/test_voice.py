@@ -380,6 +380,31 @@ class SileroSpeakerTests(unittest.TestCase):
 
         self.assertEqual(len(loads), 1)
 
+    def test_cyrillic_routes_to_russian_and_latin_to_english(self):
+        from src.voice.providers.silero import detect_language
+
+        self.assertEqual(detect_language("Привет, как дела?"), "ru")
+        self.assertEqual(detect_language("Готово: file saved"), "ru")  # mixed leans ru
+        self.assertEqual(detect_language("I have closed the video."), "en")
+        self.assertEqual(detect_language(""), "en")
+
+    def test_synthesis_picks_the_speaker_and_options_per_language(self):
+        # v4_ru speaks 0.3s of noise for an English sentence — English must go
+        # to the English model with its own speaker (and without the
+        # Russian-only put_accent/put_yo options, which it rejects).
+        model = FakeTtsModel()
+        speaker = SileroSpeaker(speaker="xenia", english_speaker="en_0", loader=lambda: model)
+
+        speaker.synthesize("Привет.")
+        speaker.synthesize("Hello there.")
+
+        russian, english = model.calls
+        self.assertEqual(russian["speaker"], "xenia")
+        self.assertTrue(russian["put_accent"])
+        self.assertEqual(english["speaker"], "en_0")
+        self.assertNotIn("put_accent", english)
+        self.assertNotIn("put_yo", english)
+
     def test_download_reports_progress_and_writes_the_file(self):
         from contextlib import contextmanager
         from tempfile import TemporaryDirectory

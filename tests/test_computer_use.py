@@ -902,6 +902,50 @@ class TwoStageLocateTests(unittest.TestCase):
 
         self.assertGreater(computer.inference_calls, calls_after_first)
 
+    def test_a_positioned_click_settles_before_pressing(self):
+        # macOS hover-revealed controls (PiP close buttons, toolbars) ignore a
+        # press fired in the same instant the pointer lands on them.
+        journal = []
+
+        class JournalPointer(RecordingPointer):
+            def move(self, x, y):
+                journal.append(("move", (x, y)))
+                super().move(x, y)
+
+            def click(self, button="left", count=1, modifiers=()):
+                journal.append(("click", button, count))
+                super().click(button, count, modifiers)
+
+        pointer = JournalPointer()
+        computer = ComputerUse(
+            locator=StubLocator([]),
+            screen=StaticScreen([Image.new("RGB", self.SCREEN)], self.SCREEN),
+            pointer=pointer,
+            overlay=NullOverlay(),
+            dpi_aware=False,
+            sleep=lambda seconds: journal.append(("sleep", seconds)),
+        )
+
+        computer.left_click(10, 20)
+
+        self.assertEqual(journal, [("move", (10, 20)), ("sleep", computer.click_settle), ("click", "left", 1)])
+        self.assertGreater(computer.click_settle, 0)
+
+    def test_a_click_at_the_current_position_does_not_wait(self):
+        journal = []
+        computer = ComputerUse(
+            locator=StubLocator([]),
+            screen=StaticScreen([Image.new("RGB", self.SCREEN)], self.SCREEN),
+            pointer=RecordingPointer(),
+            overlay=NullOverlay(),
+            dpi_aware=False,
+            sleep=lambda seconds: journal.append(("sleep", seconds)),
+        )
+
+        computer.left_click()
+
+        self.assertEqual(journal, [])
+
     def test_screen_similarity_tolerates_small_changes_only(self):
         from src.llm.tools.computer.detection import screen_thumbnail, screens_roughly_equal
 

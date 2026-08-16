@@ -42,6 +42,10 @@ class Settings(BaseSettings):
         default="xenia",
         description="Silero speaker for the local TTS provider (aidar, baya, kseniya, xenia, eugene).",
     )
+    voice_tts_speaker_en: str = Field(
+        default="en_0",
+        description="Silero v3_en speaker used when a sentence has no Cyrillic (en_0 … en_117).",
+    )
     voice_language: str | None = Field(
         default=None,
         description="Fixed speech language code such as 'ru'; None auto-detects per utterance.",

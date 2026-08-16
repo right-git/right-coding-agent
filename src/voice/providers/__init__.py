@@ -22,7 +22,13 @@ def build_transcriber(provider: VoiceProvider) -> Transcriber:
 
 def build_speaker(provider: VoiceProvider) -> Speaker:
     if provider.provider_name == "local":
-        return SileroSpeaker(speaker=provider.voice or "xenia")
+        try:
+            from src.config.settings import settings
+
+            english_speaker = settings.voice_tts_speaker_en
+        except Exception:
+            english_speaker = "en_0"
+        return SileroSpeaker(speaker=provider.voice or "xenia", english_speaker=english_speaker)
     if provider.provider_name in PLANNED_PROVIDERS:
         raise NotImplementedError(f"TTS provider {provider.provider_name!r} is planned but not implemented yet")
     raise ValueError(f"Unknown TTS provider {provider.provider_name!r}; available: local")

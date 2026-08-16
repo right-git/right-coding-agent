@@ -83,6 +83,7 @@ class ComputerUse:
         cache_detections: bool = True,
         cache_ttl: float = 15.0,
         clock: Callable[[], float] | None = None,
+        click_settle: float = 0.2,
     ) -> None:
         if dpi_aware:
             platforms.enable_dpi_awareness()
@@ -102,6 +103,7 @@ class ComputerUse:
         self.cache_detections = cache_detections
         self.cache_ttl = cache_ttl
         self._clock = clock or time.monotonic
+        self.click_settle = click_settle
 
         self.last_screenshot: Image.Image | None = None
         self.last_detections: list[Detection] = []
@@ -414,6 +416,10 @@ class ComputerUse:
     ) -> None:
         if x is not None and y is not None:
             self.move_mouse(x, y)
+            # Hover-revealed controls (macOS PiP close buttons, fading
+            # toolbars) ignore a press fired the instant the pointer lands —
+            # give the hover state time to appear before pressing.
+            self._sleep(self.click_settle)
         logger.info(
             "Mouse click button [{}] count [{}] at [{}]",
             button,
