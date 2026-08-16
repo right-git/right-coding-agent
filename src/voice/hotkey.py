@@ -11,6 +11,7 @@ and is imported lazily so the module stays light.
 
 import sys
 import threading
+import time
 from collections.abc import Callable
 
 from loguru import logger
@@ -68,15 +69,23 @@ def resolve_darwin_keycode(spec: str) -> set[int] | None:
 def darwin_state_reader(keycodes: set[int], key_state=None):
     """A KeyStatePoller state reader over Quartz.CGEventSourceKeyState.
 
-    Reads the session's HID key state directly — there is no event tap for
-    macOS to disable, so it keeps working through the CPU spikes that kill
-    pynput's tap (`key_state` is the test seam).
+    Reads key state directly — there is no event tap for macOS to disable, so
+    it keeps working through the CPU spikes that kill pynput's tap. Both
+    event-source states are consulted (HID is the canonical one for physical
+    keys; the combined session state covers synthetic presses) because which
+    one reflects reality varies with the terminal's TCC context.
+    `key_state(code)` is the test seam.
     """
     if key_state is None:
         import Quartz
 
+        sources = (
+            Quartz.kCGEventSourceStateHIDSystemState,
+            Quartz.kCGEventSourceStateCombinedSessionState,
+        )
+
         def key_state(code):
-            return Quartz.CGEventSourceKeyState(Quartz.kCGEventSourceStateCombinedSessionState, code)
+            return any(Quartz.CGEventSourceKeyState(source, code) for source in sources)
 
     return lambda: any(key_state(code) for code in keycodes)
 
@@ -235,14 +244,43 @@ def parse_hotkey(spec: str) -> set:
     return {key}
 
 
+class DualListener:
+    """Several key backends running at once; any of them may deliver the press.
+
+    On macOS neither single backend is trustworthy alone: the pynput event
+    tap is silently disabled by `kCGEventTapDisabledByTimeout` under CPU
+    load, while `CGEventSourceKeyState` polling is blind in some terminals'
+    TCC contexts (observed live in kitty: the tap delivered for weeks, the
+    poller never saw a single press). The fire debounce dedupes a press both
+    backends report.
+    """
+
+    def __init__(self, backends):
+        self.backends = list(backends)
+
+    def start(self) -> None:
+        pass  # backends are started as they are built
+
+    def stop(self) -> None:
+        for backend in self.backends:
+            try:
+                backend.stop()
+            except Exception:
+                logger.exception("Hotkey backend stop failed")
+
+
 class HotkeyListener:
     """Fires `on_toggle` on every press of the configured key, from a watcher thread.
 
-    On Windows with a mappable key this is a `KeyStatePoller`; otherwise a
+    On Windows with a mappable key this is a `KeyStatePoller`; on macOS a
+    poller AND a pynput tap run together (`DualListener`); otherwise a
     global pynput listener. `listener_factory(on_press)` is the test seam and
     forces the pynput-style path. Errors in `on_toggle` are logged, never
-    raised — a broken callback must not kill the watcher.
+    raised — a broken callback must not kill the watcher. `_fire` debounces:
+    one physical press reported by two backends toggles once.
     """
+
+    DEBOUNCE_SECONDS = 0.25
 
     def __init__(
         self,
@@ -256,8 +294,13 @@ class HotkeyListener:
         self._listener_factory = listener_factory
         self._access_checker = access_checker
         self._listener = None
+        self._last_fire = float("-inf")
 
-    def _fire(self) -> None:
+    def _fire(self, now: float | None = None) -> None:
+        now = time.monotonic() if now is None else now
+        if now - self._last_fire < self.DEBOUNCE_SECONDS:
+            return  # the same press, reported by a second backend
+        self._last_fire = now
         try:
             self.on_toggle()
         except Exception as error:
@@ -290,17 +333,30 @@ class HotkeyListener:
             raise PermissionError(ACCESS_HINT)
 
         if self._listener_factory is None and sys.platform == "darwin":
-            # Primary macOS backend: poll the HID key state. A pynput event
-            # tap is silently disabled by kCGEventTapDisabledByTimeout when
-            # whisper's CPU spikes starve the callback (observed live: the
-            # stop press never arrived and recording ran forever), and pynput
-            # never re-enables it. Polling has no tap to lose — the same cure
-            # as GetAsyncKeyState on Windows.
+            # Run BOTH backends (see DualListener): the poller survives the
+            # CPU spikes that kill the tap, the tap works where polling is
+            # blind; the debounce in _fire dedupes double reports.
+            backends = []
             keycodes = resolve_darwin_keycode(self.key_spec)
             if keycodes:
-                self._listener = KeyStatePoller(keycodes, self._fire, state_reader=darwin_state_reader(keycodes))
-                self._listener.start()
-                logger.info("Push-to-talk backend: macOS key-state poller ({})", self.key_spec)
+                poller = KeyStatePoller(keycodes, self._fire, state_reader=darwin_state_reader(keycodes))
+                poller.start()
+                backends.append(poller)
+            try:
+                watched = parse_hotkey(self.key_spec)
+
+                def on_press(key) -> None:
+                    if key in watched:
+                        self._fire()
+
+                tap = self._default_listener(on_press)
+                tap.start()
+                backends.append(tap)
+            except Exception:
+                logger.exception("pynput tap unavailable; polling only")
+            if backends:
+                self._listener = DualListener(backends)
+                logger.info("Push-to-talk backend: macOS poller+tap ({}, {} backend(s))", self.key_spec, len(backends))
                 return
 
         keys = parse_hotkey(self.key_spec)

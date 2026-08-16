@@ -198,19 +198,32 @@ class HotkeyTests(unittest.TestCase):
         self.assertFalse(reader())
 
     @unittest.skipUnless(sys.platform == "darwin", "poller backend — только macOS")
-    def test_macos_listener_prefers_the_key_state_poller(self):
-        # A pynput event tap dies silently when macOS hits
-        # kCGEventTapDisabledByTimeout under CPU load (whisper steps during
-        # recording) and pynput never re-enables it — the second press is
-        # lost and the pill sticks on "listening". Polling has no tap to lose.
-        from src.voice.hotkey import KeyStatePoller
+    def test_macos_listener_runs_poller_and_tap_together(self):
+        # Belt and braces: the pynput tap dies under CPU load
+        # (kCGEventTapDisabledByTimeout, never re-enabled), while key-state
+        # polling is blind in some terminals' TCC contexts (observed live in
+        # kitty: taps deliver, CGEventSourceKeyState sees nothing). Running
+        # both — deduped by the fire debounce — survives either failure.
+        from src.voice.hotkey import DualListener, KeyStatePoller
 
         listener = HotkeyListener("alt_r", on_toggle=lambda: None, access_checker=lambda: True)
         listener.start()
         try:
-            self.assertIsInstance(listener._listener, KeyStatePoller)
+            self.assertIsInstance(listener._listener, DualListener)
+            self.assertTrue(any(isinstance(backend, KeyStatePoller) for backend in listener._listener.backends))
+            self.assertGreaterEqual(len(listener._listener.backends), 2)
         finally:
             listener.stop()
+
+    def test_fire_debounce_collapses_double_reports_of_one_press(self):
+        toggles = []
+        listener = HotkeyListener("f8", on_toggle=lambda: toggles.append(1))
+
+        listener._fire(now=100.0)  # poller saw the press
+        listener._fire(now=100.05)  # ...and the tap saw the same press
+        listener._fire(now=101.0)  # a genuinely new press
+
+        self.assertEqual(len(toggles), 2)
 
     def test_hotkey_gets_a_human_label_on_macos(self):
         from src.voice.hotkey import describe_hotkey
