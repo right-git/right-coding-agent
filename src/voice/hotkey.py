@@ -33,6 +33,53 @@ VK_CODES = {
     **{f"f{n}": 0x70 + n - 1 for n in range(1, 25)},
 }
 
+# macOS virtual keycodes (kVK_*) for the same key-spec names.
+DARWIN_KEYCODES = {
+    "alt_r": 61,
+    "alt_gr": 61,  # AltGr arrives as right Option
+    "alt_l": 58,
+    "cmd_r": 54,
+    "cmd_l": 55,
+    "ctrl_r": 62,
+    "ctrl_l": 59,
+    "shift_r": 60,
+    "shift_l": 56,
+    "caps_lock": 57,
+    "space": 49,
+    "home": 115,
+    "end": 119,
+    **dict(
+        zip(
+            [f"f{n}" for n in range(1, 21)],
+            [122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, 105, 107, 113, 106, 64, 79, 80, 90],
+        )
+    ),
+}
+
+
+def resolve_darwin_keycode(spec: str) -> set[int] | None:
+    """macOS keycodes for a key spec, or None when only pynput can watch it."""
+    spec = spec.strip().lower()
+    if spec in DARWIN_KEYCODES:
+        return {DARWIN_KEYCODES[spec]}
+    return None
+
+
+def darwin_state_reader(keycodes: set[int], key_state=None):
+    """A KeyStatePoller state reader over Quartz.CGEventSourceKeyState.
+
+    Reads the session's HID key state directly — there is no event tap for
+    macOS to disable, so it keeps working through the CPU spikes that kill
+    pynput's tap (`key_state` is the test seam).
+    """
+    if key_state is None:
+        import Quartz
+
+        def key_state(code):
+            return Quartz.CGEventSourceKeyState(Quartz.kCGEventSourceStateCombinedSessionState, code)
+
+    return lambda: any(key_state(code) for code in keycodes)
+
 
 def resolve_vk(spec: str) -> set[int] | None:
     """Windows virtual-key codes for a key spec, or None when unmapped."""
@@ -241,6 +288,20 @@ class HotkeyListener:
             allowed = self._listener_factory is not None or macos_input_access()
         if not allowed:
             raise PermissionError(ACCESS_HINT)
+
+        if self._listener_factory is None and sys.platform == "darwin":
+            # Primary macOS backend: poll the HID key state. A pynput event
+            # tap is silently disabled by kCGEventTapDisabledByTimeout when
+            # whisper's CPU spikes starve the callback (observed live: the
+            # stop press never arrived and recording ran forever), and pynput
+            # never re-enables it. Polling has no tap to lose — the same cure
+            # as GetAsyncKeyState on Windows.
+            keycodes = resolve_darwin_keycode(self.key_spec)
+            if keycodes:
+                self._listener = KeyStatePoller(keycodes, self._fire, state_reader=darwin_state_reader(keycodes))
+                self._listener.start()
+                logger.info("Push-to-talk backend: macOS key-state poller ({})", self.key_spec)
+                return
 
         keys = parse_hotkey(self.key_spec)
         logger.info("Push-to-talk backend: pynput listener ({})", self.key_spec)

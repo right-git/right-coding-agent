@@ -440,7 +440,7 @@ class StatusOverlay:
             active = self._has_content(now)
             if active:
                 canvas.delete("all")
-                self._draw(canvas, width, height, now)
+                self._safe_draw(canvas, width, height, now)
                 if not visible[0]:
                     root.deiconify()
                     root.attributes("-topmost", True)
@@ -457,6 +457,17 @@ class StatusOverlay:
         root.mainloop()
 
     # -------------------------------------------------------------- drawing
+
+    def _safe_draw(self, canvas, width: int, height: int, now: float) -> None:
+        """One bad frame must never freeze the overlay.
+
+        tick() reschedules itself with root.after — an exception escaping the
+        draw would break that chain and leave the last frame stuck on screen.
+        """
+        try:
+            self._draw(canvas, width, height, now)
+        except Exception:
+            logger.exception("Overlay frame failed")
 
     def _draw(self, canvas, width: int, height: int, now: float) -> None:
         if self.computer_active(now) and not self.pill_only:

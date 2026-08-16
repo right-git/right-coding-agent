@@ -178,6 +178,40 @@ class HotkeyTests(unittest.TestCase):
 
         self.assertTrue(macos_input_access(platform="win32"))
 
+    def test_darwin_keycodes_resolve_for_named_keys(self):
+        from src.voice.hotkey import resolve_darwin_keycode
+
+        self.assertEqual(resolve_darwin_keycode("alt_r"), {61})
+        self.assertEqual(resolve_darwin_keycode("alt_gr"), {61})  # same physical key
+        self.assertEqual(resolve_darwin_keycode("f8"), {100})
+        self.assertIsNone(resolve_darwin_keycode("no_such_key"))
+        self.assertIsNone(resolve_darwin_keycode("g"))  # characters stay on pynput
+
+    def test_darwin_state_reader_reports_any_watched_key(self):
+        from src.voice.hotkey import darwin_state_reader
+
+        down = {61}
+        reader = darwin_state_reader({58, 61}, key_state=lambda code: code in down)
+        self.assertTrue(reader())
+
+        down.clear()
+        self.assertFalse(reader())
+
+    @unittest.skipUnless(sys.platform == "darwin", "poller backend — только macOS")
+    def test_macos_listener_prefers_the_key_state_poller(self):
+        # A pynput event tap dies silently when macOS hits
+        # kCGEventTapDisabledByTimeout under CPU load (whisper steps during
+        # recording) and pynput never re-enables it — the second press is
+        # lost and the pill sticks on "listening". Polling has no tap to lose.
+        from src.voice.hotkey import KeyStatePoller
+
+        listener = HotkeyListener("alt_r", on_toggle=lambda: None, access_checker=lambda: True)
+        listener.start()
+        try:
+            self.assertIsInstance(listener._listener, KeyStatePoller)
+        finally:
+            listener.stop()
+
     def test_hotkey_gets_a_human_label_on_macos(self):
         from src.voice.hotkey import describe_hotkey
 
@@ -846,6 +880,17 @@ class StatusOverlayTests(unittest.TestCase):
         self.assertEqual(blend("#000000", "#ff0000", 0.0), "#000000")
         self.assertEqual(blend("#000000", "#ff0000", 1.0), "#ff0000")
         self.assertEqual(blend("#000000", "#ff0000", 0.5), "#800000")
+
+    def test_one_bad_frame_never_freezes_the_overlay(self):
+        # tick() reschedules itself with root.after; an exception escaping the
+        # draw would break that chain and freeze the pill on its last frame.
+        from unittest.mock import Mock
+
+        from src.ui.overlay import StatusOverlay
+
+        overlay = StatusOverlay()
+        with patch.object(StatusOverlay, "_draw", side_effect=RuntimeError("boom")):
+            overlay._safe_draw(Mock(), 100, 100, now=0.0)  # must not raise
 
     def test_hidden_voice_state_never_starts_the_window(self):
         from src.ui.overlay import StatusOverlay
