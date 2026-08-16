@@ -22,6 +22,18 @@ _fd_lock = threading.Lock()
 _fd_depth = 0
 _fd_saved: int | None = None
 
+# Native noise is redirected here, not to /dev/null: when a dylib aborts the
+# process, its last words are the only clue (a Tk-on-a-thread AppKit abort
+# once exited "silently" because they went to a black hole).
+NATIVE_STDERR_LOG = "logs.native.log"
+
+
+def _open_capture_fd() -> int:
+    try:
+        return os.open(NATIVE_STDERR_LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    except OSError:
+        return os.open(os.devnull, os.O_WRONLY)
+
 
 class _ThreadRoutedStream:
     """Forwards to the wrapped stream unless the writing thread is silenced."""
@@ -78,18 +90,19 @@ def suppress_native_stderr():
     `silenced()` only intercepts Python's `sys.stderr`; the Objective-C
     runtime's duplicate-class warnings (av and cv2 both bundle libavdevice)
     are written straight to fd 2 and land on top of the prompt. This dups
-    /dev/null over fd 2 for the duration — process-global by nature, so keep
-    the window to the model-construction call itself, never around a long
-    download. Nesting/overlap from concurrent loader threads is refcounted;
-    the fd is restored at the outermost exit.
+    `NATIVE_STDERR_LOG` over fd 2 for the duration — the noise stays off the
+    prompt but remains on disk for post-mortems. Process-global by nature, so
+    keep the window to the model-construction call itself, never around a
+    long download. Nesting/overlap from concurrent loader threads is
+    refcounted; the fd is restored at the outermost exit.
     """
     global _fd_depth, _fd_saved
     with _fd_lock:
         if _fd_depth == 0:
             _fd_saved = os.dup(2)
-            devnull = os.open(os.devnull, os.O_WRONLY)
-            os.dup2(devnull, 2)
-            os.close(devnull)
+            capture = _open_capture_fd()
+            os.dup2(capture, 2)
+            os.close(capture)
         _fd_depth += 1
     try:
         yield

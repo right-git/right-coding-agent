@@ -94,22 +94,30 @@ class KeyStatePoller:
 
 
 ACCESS_HINT = (
-    "push-to-talk needs the macOS Accessibility permission: System Settings → "
-    "Privacy & Security → Accessibility → enable your terminal app, then restart"
+    "push-to-talk needs macOS permissions: System Settings → Privacy & Security → "
+    "enable your terminal app under BOTH Accessibility and Input Monitoring, then restart"
 )
 
+DARWIN_KEY_LABELS = {
+    "alt_r": "right Option ⌥",
+    "alt_l": "left Option ⌥",
+    "alt_gr": "right Option ⌥",
+    "cmd_r": "right Command ⌘",
+    "cmd_l": "left Command ⌘",
+    "ctrl_r": "right Control ⌃",
+    "ctrl_l": "left Control ⌃",
+}
 
-def macos_input_access() -> bool:
-    """True when this process may watch global input; asks macOS to grant it once.
 
-    Starting an untrusted event tap makes the OS print "This process is not
-    trusted!" straight to stderr (over the live prompt) and the listener
-    silently receives nothing — so preflight, trigger the system permission
-    dialog, and let the caller explain instead. When the check itself is
-    unavailable, report access so pynput still gets its chance.
-    """
-    if sys.platform != "darwin":
-        return True
+def describe_hotkey(spec: str, platform: str | None = None) -> str:
+    """The key spec with its macOS name — "alt_r" alone reads as the wrong key there."""
+    spec = spec.strip().lower()
+    label = DARWIN_KEY_LABELS.get(spec) if (platform or sys.platform) == "darwin" else None
+    return f"{spec} ({label})" if label else spec
+
+
+def _accessibility_granted() -> bool:
+    """Accessibility (AXIsProcessTrusted); raises the system dialog once when missing."""
     try:
         import ApplicationServices
 
@@ -123,6 +131,41 @@ def macos_input_access() -> bool:
         return False
     except Exception:
         return True
+
+
+def _input_monitoring_granted() -> bool:
+    """Input Monitoring (CGPreflightListenEventAccess); requests it once when missing.
+
+    A listen-only keyboard tap on modern macOS needs this in addition to
+    Accessibility — without it the tap starts with no error and then silently
+    receives nothing, which reads as "the key does nothing".
+    """
+    try:
+        import Quartz
+
+        if Quartz.CGPreflightListenEventAccess():
+            return True
+        try:
+            Quartz.CGRequestListenEventAccess()
+        except Exception:
+            logger.debug("Could not raise the macOS input-monitoring prompt")
+        return False
+    except Exception:
+        return True
+
+
+def macos_input_access(platform: str | None = None) -> bool:
+    """True when this process may watch global input; asks macOS to grant it once.
+
+    Starting an untrusted event tap makes the OS print "This process is not
+    trusted!" straight to stderr (over the live prompt) and the listener
+    silently receives nothing — so preflight both permissions, trigger the
+    system dialogs, and let the caller explain instead. When a check itself is
+    unavailable, report access so pynput still gets its chance.
+    """
+    if (platform or sys.platform) != "darwin":
+        return True
+    return _accessibility_granted() and _input_monitoring_granted()
 
 
 def parse_hotkey(spec: str) -> set:

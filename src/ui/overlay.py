@@ -26,6 +26,8 @@ import time
 
 from loguru import logger
 
+from src.llm.tools.computer.overlay import tk_thread_supported
+
 TRANSPARENT_KEY = "#0B1F0B"
 PILL_BACKGROUND = "#11161C"
 LISTENING_COLOR = "#FF3B30"
@@ -63,6 +65,8 @@ class StatusOverlay:
     # ------------------------------------------------------------ public API
 
     def set_voice(self, state: str | None) -> None:
+        if state is None and not self._is_running():
+            return  # already hidden — don't create a window just to show nothing
         if self._start():
             self._commands.put(("voice", state))
 
@@ -94,8 +98,16 @@ class StatusOverlay:
 
     # -------------------------------------------------------------- Tk loop
 
+    def _is_running(self) -> bool:
+        thread = self._thread
+        return thread is not None and thread.is_alive()
+
     def _start(self) -> bool:
         if self._failed:
+            return False
+        if not tk_thread_supported():
+            logger.info("Status overlay unavailable: Tk windows need the main thread on this OS")
+            self._failed = True
             return False
         with self._lock:
             if self._thread is not None and self._thread.is_alive():

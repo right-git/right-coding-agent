@@ -7,8 +7,22 @@ import textwrap
 import threading
 from dataclasses import dataclass, field
 
+from loguru import logger
+
 from .detection import box_center
 from .types import Marker, Point, Size
+
+
+def tk_thread_supported(platform: str | None = None) -> bool:
+    """Whether a Tk window may be created on a background thread here.
+
+    On macOS AppKit only allows window creation on the main thread — a Tk
+    root on any other thread raises NSException and ABORTS the whole process
+    (observed live: SIGABRT in TkMacOSXMakeRealWindowExist ← _tkinter_create).
+    The overlays must therefore stay off on darwin.
+    """
+    return (platform or sys.platform) != "darwin"
+
 
 GWL_EXSTYLE = -20
 GA_ROOT = 2
@@ -183,6 +197,10 @@ class TkOverlay:
 
     def _start(self) -> bool:
         if self._failed:
+            return False
+        if not tk_thread_supported():
+            logger.warning("Marker overlay unavailable: Tk windows need the main thread on this OS")
+            self._failed = True
             return False
         with self._lock:
             if self._thread is not None and self._thread.is_alive():

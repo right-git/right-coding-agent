@@ -2,7 +2,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from PIL import Image
 
@@ -317,6 +317,22 @@ class PointerTests(unittest.TestCase):
 
 
 class OverlayHelperTests(unittest.TestCase):
+    def test_tk_thread_is_unsupported_on_macos(self):
+        from src.llm.tools.computer.overlay import tk_thread_supported
+
+        self.assertFalse(tk_thread_supported("darwin"))
+        self.assertTrue(tk_thread_supported("win32"))
+        self.assertTrue(tk_thread_supported("linux"))
+
+    def test_marker_overlay_refuses_to_start_where_tk_needs_the_main_thread(self):
+        from src.llm.tools.computer.overlay import TkOverlay
+
+        overlay = TkOverlay()
+        with patch("src.llm.tools.computer.overlay.tk_thread_supported", return_value=False):
+            self.assertFalse(overlay._start())
+
+        self.assertIsNone(overlay._thread)
+
     def test_wrap_note_wraps_long_lines_and_keeps_author_breaks(self):
         self.assertEqual(
             wrap_note("one two three\n\nfour", width=7),

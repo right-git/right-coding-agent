@@ -96,6 +96,28 @@ class SuppressNativeStderrTests(unittest.TestCase):
         self.assertNotIn(b"native noise", data)
         self.assertIn(b"after", data)
 
+    def test_native_noise_is_captured_to_the_log_file(self):
+        # A crashing dylib's abort message must stay diagnosable — the noise
+        # goes to a sidecar file, never to a black hole.
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from src.utils import silence
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "native.log"
+            read_fd, saved = self.capture_fd2()
+            try:
+                with patch.object(silence, "NATIVE_STDERR_LOG", str(log_path)):
+                    with suppress_native_stderr():
+                        os.write(2, b"objc noise")
+            finally:
+                data = self.restore_fd2(read_fd, saved)
+
+            self.assertNotIn(b"objc noise", data)
+            self.assertIn(b"objc noise", log_path.read_bytes())
+
     def test_nested_use_restores_only_at_the_outermost_exit(self):
         read_fd, saved = self.capture_fd2()
         try:

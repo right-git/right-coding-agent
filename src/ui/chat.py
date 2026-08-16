@@ -114,6 +114,12 @@ class ChatUI:
                 key = settings.voice_ptt_key
             except Exception:
                 key = "alt_r"
+        try:
+            from src.voice.hotkey import describe_hotkey
+
+            key = describe_hotkey(key)
+        except Exception:
+            pass
         replies = "on" if self.voice_active else "off"
         return f"push-to-talk {key} · spoken replies {replies} (/voice)"
 

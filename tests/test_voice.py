@@ -159,7 +159,31 @@ class HotkeyTests(unittest.TestCase):
             listener.start()
 
         self.assertIn("Accessibility", str(raised.exception))
+        self.assertIn("Input Monitoring", str(raised.exception))
         self.assertEqual(factory_calls, [])
+
+    def test_macos_access_needs_both_permissions(self):
+        from src.voice import hotkey as hotkey_module
+
+        cases = [(True, True, True), (True, False, False), (False, True, False)]
+        for accessibility, monitoring, expected in cases:
+            with (
+                patch.object(hotkey_module, "_accessibility_granted", return_value=accessibility),
+                patch.object(hotkey_module, "_input_monitoring_granted", return_value=monitoring),
+            ):
+                self.assertEqual(hotkey_module.macos_input_access(platform="darwin"), expected)
+
+    def test_access_is_assumed_outside_macos(self):
+        from src.voice.hotkey import macos_input_access
+
+        self.assertTrue(macos_input_access(platform="win32"))
+
+    def test_hotkey_gets_a_human_label_on_macos(self):
+        from src.voice.hotkey import describe_hotkey
+
+        self.assertEqual(describe_hotkey("alt_r", platform="darwin"), "alt_r (right Option ⌥)")
+        self.assertEqual(describe_hotkey("alt_r", platform="win32"), "alt_r")
+        self.assertEqual(describe_hotkey("f8", platform="darwin"), "f8")
 
     def test_granted_input_access_starts_the_listener(self):
         class FakeListener:
@@ -727,6 +751,28 @@ class StatusOverlayTests(unittest.TestCase):
         self.assertEqual(blend("#000000", "#ff0000", 1.0), "#ff0000")
         self.assertEqual(blend("#000000", "#ff0000", 0.5), "#800000")
 
+    def test_overlay_refuses_to_start_where_tk_needs_the_main_thread(self):
+        # AppKit aborts the WHOLE process (SIGABRT in TkMacOSXMakeRealWindowExist)
+        # when a Tk window is created off the main thread — seen live on macOS
+        # at the end of the first voice turn.
+        from src.ui.overlay import StatusOverlay
+
+        overlay = StatusOverlay()
+        with patch("src.ui.overlay.tk_thread_supported", return_value=False):
+            overlay.set_voice("listening")
+            overlay.ping_computer()
+
+        self.assertIsNone(overlay._thread)
+
+    def test_hidden_voice_state_never_starts_the_window(self):
+        from src.ui.overlay import StatusOverlay
+
+        overlay = StatusOverlay()
+        with patch("src.ui.overlay.tk_thread_supported", return_value=True):
+            overlay.set_voice(None)  # already hidden — nothing to show
+
+        self.assertIsNone(overlay._thread)
+
 
 class VoiceUiTests(unittest.TestCase):
     def test_notify_done_is_silent_in_voice_mode(self):
@@ -785,6 +831,15 @@ class VoiceUiTests(unittest.TestCase):
             started - 5,
             "a state change must restart the clock",
         )
+
+    def test_welcome_line_uses_the_human_key_label(self):
+        from src.ui.chat import ChatUI
+        from src.voice.hotkey import describe_hotkey
+
+        ui = ChatUI(model="m")
+        ui.voice = SimpleNamespace(key_spec="alt_r", speak_replies=False)
+
+        self.assertIn(f"push-to-talk {describe_hotkey('alt_r')}", ui._voice_welcome_line())
 
     def test_rprompt_combines_voice_and_model_status(self):
         from src.ui.chat import ChatUI
