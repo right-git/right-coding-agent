@@ -127,6 +127,53 @@ def enable_click_through(window_handle: int, *, user32=None) -> None:
     )
 
 
+def marker_payload(marker: Marker) -> dict:
+    """A `Marker` as the JSON-safe wire dict the overlay child understands."""
+    return {
+        "box": list(marker.box),
+        "title": marker.title,
+        "note": marker.note,
+        "duration": marker.duration,
+        "anchor": list(marker.anchor) if marker.anchor else None,
+    }
+
+
+class ChildMarkerOverlay:
+    """Marker backend for macOS: draws through the status-overlay child process.
+
+    A Tk window may not live on a background thread there (AppKit aborts the
+    process), so `screen_mark` highlights are serialized to the same child
+    that renders the voice pill. `close()` is a no-op — the child's lifecycle
+    belongs to the status-overlay singleton.
+    """
+
+    def __init__(self, status_overlay=None):
+        self._status = status_overlay
+
+    def _overlay(self):
+        if self._status is None:
+            from src.ui.overlay import get_status_overlay
+
+            self._status = get_status_overlay()
+        return self._status
+
+    def show(self, marker: Marker) -> None:
+        self._overlay().show_marker(marker_payload(marker))
+
+    def hide(self) -> None:
+        self._overlay().hide_marker()
+
+    def close(self) -> None:
+        pass
+
+
+def default_overlay():
+    """The marker overlay for this platform: Tk thread, or the macOS child."""
+    if tk_thread_supported():
+        return TkOverlay()
+    return ChildMarkerOverlay()
+
+
 class NullOverlay:
     """Overlay backend that records markers instead of drawing them."""
 

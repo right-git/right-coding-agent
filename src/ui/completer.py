@@ -22,6 +22,7 @@ COMMANDS: dict[str, str] = {
     "/paste": "attach a clipboard image",
     "/sound": "toggle the completion sound",
     "/voice": "voice mode (push-to-talk + TTS)",
+    "/check": "check & request macOS permissions",
     "/log-level": "show or change log level",
     "/clear": "clear screen and history",
     "/quit": "exit",

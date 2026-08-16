@@ -34,6 +34,7 @@ import math
 import os
 import queue
 import sys
+import textwrap
 import threading
 import time
 from pathlib import Path
@@ -72,7 +73,62 @@ def blend(color_a: str, color_b: str, t: float) -> str:
     return "#{:02x}{:02x}{:02x}".format(*parts)
 
 
-COMMANDS = ("voice", "computer", "stop")
+COMMANDS = ("voice", "computer", "marker", "stop")
+MARKER_ACCENT = "#FF3B30"
+MARKER_FOREGROUND = "#F2F5F8"
+MARKER_WRAP_CHARS = 46
+MARKER_FONT = "Helvetica Neue" if sys.platform == "darwin" else "Segoe UI"
+
+
+# The three geometry helpers below are copies of the canonical ones in
+# `src/llm/tools/computer/overlay.py` (kept in sync by a unit test) — this
+# file must stay runnable as a child script without importing `src.*`.
+
+
+def wrap_note(note: str, width: int) -> list[str]:
+    """Wrap a note to `width` characters, keeping author-written line breaks."""
+    if width <= 0:
+        raise ValueError("width must be positive")
+    lines: list[str] = []
+    for paragraph in note.splitlines():
+        if not paragraph.strip():
+            continue
+        lines.extend(textwrap.wrap(paragraph.strip(), width=width) or [])
+    return lines
+
+
+def tooltip_placement(anchor, tooltip_size, screen_size, *, offset: int = 24, margin: int = 12):
+    """Place the tooltip next to `anchor`, flipping it to stay on screen."""
+    anchor_x, anchor_y = anchor
+    tooltip_width, tooltip_height = tooltip_size
+    screen_width, screen_height = screen_size
+
+    x = anchor_x + offset
+    if x + tooltip_width + margin > screen_width:
+        x = anchor_x - offset - tooltip_width
+    y = anchor_y + offset
+    if y + tooltip_height + margin > screen_height:
+        y = anchor_y - offset - tooltip_height
+
+    max_x = max(margin, screen_width - tooltip_width - margin)
+    max_y = max(margin, screen_height - tooltip_height - margin)
+    return (min(max(x, margin), max_x), min(max(y, margin), max_y))
+
+
+def connector_corner(anchor, position, tooltip_size):
+    """Corner of the tooltip that faces `anchor`, for the connector line."""
+    anchor_x, anchor_y = anchor
+    x, y = position
+    width, height = tooltip_size
+    return (
+        x if anchor_x < x else x + width,
+        y if anchor_y < y else y + height,
+    )
+
+
+def scale_coords(values, scale: float) -> list[float]:
+    """Capture-pixel coordinates → Tk points (retina capture is 2x the grid)."""
+    return [value / scale for value in values]
 
 
 def encode_command(command: str, payload=None) -> str:
@@ -115,11 +171,14 @@ def _ensure_tcl_env(base_prefix: str | None = None) -> None:
 class StatusOverlay:
     """Queue/pipe-driven overlay; safe to call from any thread."""
 
-    def __init__(self, screen_size=None, child_factory=None, pill_only: bool = False):
+    def __init__(self, screen_size=None, child_factory=None, pill_only: bool = False, marker_scale: float = 1.0):
         self.screen_size = screen_size
-        self.pill_only = pill_only  # child mode: small pill window, no border
+        self.pill_only = pill_only  # fallback child mode: small pill window only
+        self.marker_scale = marker_scale  # capture pixels per Tk point (retina: 2)
         self.voice_state: str | None = None  # None | "listening" | "syncing"
         self.computer_until = 0.0  # monotonic deadline of the border layer
+        self.marker: dict | None = None  # screen_mark highlight, capture coords
+        self.marker_until = 0.0
         self._commands: queue.Queue = queue.Queue()
         self._thread: threading.Thread | None = None
         self._child = None  # subprocess.Popen-shaped, macOS backend
@@ -136,9 +195,16 @@ class StatusOverlay:
         self._dispatch("voice", state)
 
     def ping_computer(self, linger: float = COMPUTER_LINGER) -> None:
-        if not tk_thread_supported():
-            return  # the macOS child draws only the voice pill — no border to ping
         self._dispatch("computer", linger)
+
+    def show_marker(self, marker: dict) -> None:
+        """Show a screen_mark highlight; `marker` is the wire dict (see Marker)."""
+        self._dispatch("marker", marker)
+
+    def hide_marker(self) -> None:
+        if not self._is_active():
+            return  # nothing shown — don't boot a backend just to hide
+        self._dispatch("marker", None)
 
     def prewarm(self) -> None:
         """Start the backend early so the first real command shows instantly.
@@ -178,10 +244,25 @@ class StatusOverlay:
             self.voice_state = payload
         elif command == "computer":
             self.computer_until = max(self.computer_until, now + payload)
+        elif command == "marker":
+            self.marker = payload
+            self.marker_until = 0.0 if payload is None else now + float(payload.get("duration") or 6.0)
 
     def computer_active(self, now: float | None = None) -> bool:
         now = time.monotonic() if now is None else now
         return now < self.computer_until
+
+    def marker_active(self, now: float | None = None) -> bool:
+        now = time.monotonic() if now is None else now
+        return self.marker is not None and now < self.marker_until
+
+    def _has_content(self, now: float) -> bool:
+        """Whether anything must be on screen; border and markers need the fullscreen window."""
+        if self.voice_state is not None:
+            return True
+        if self.pill_only:
+            return False
+        return self.computer_active(now) or self.marker_active(now)
 
     # -------------------------------------------------------------- Tk loop
 
@@ -353,7 +434,7 @@ class StatusOverlay:
                 pass
 
             now = time.monotonic()
-            active = self.voice_state is not None or self.computer_active(now)
+            active = self._has_content(now)
             if active:
                 canvas.delete("all")
                 self._draw(canvas, width, height, now)
@@ -377,8 +458,65 @@ class StatusOverlay:
     def _draw(self, canvas, width: int, height: int, now: float) -> None:
         if self.computer_active(now) and not self.pill_only:
             self._draw_border(canvas, width, height, now)
+        if self.marker_active(now) and not self.pill_only:
+            self._draw_marker(canvas, width, height)
         if self.voice_state is not None:
             self._draw_pill(canvas, width, height, now)
+
+    def _draw_marker(self, canvas, width: int, height: int) -> None:
+        """The screen_mark highlight: outlined box, connector, tooltip.
+
+        Mirrors `TkOverlay._draw` in `src/llm/tools/computer/overlay.py`;
+        coordinates arrive in capture pixels and are scaled to Tk points.
+        """
+        from tkinter import font as tkinter_font
+
+        marker = self.marker
+        x1, y1, x2, y2 = scale_coords(marker.get("box") or (0, 0, 0, 0), self.marker_scale)
+        canvas.create_rectangle(x1, y1, x2, y2, outline=MARKER_ACCENT, width=3)
+
+        if marker.get("anchor"):
+            anchor_x, anchor_y = scale_coords(marker["anchor"], self.marker_scale)
+        else:
+            anchor_x = min(max((x1 + x2) / 2, 0), width)
+            anchor_y = min(max((y1 + y2) / 2, 0), height)
+        anchor = (anchor_x, anchor_y)
+
+        title = str(marker.get("title") or "")
+        note_lines = wrap_note(str(marker.get("note") or ""), MARKER_WRAP_CHARS)
+        title_font = tkinter_font.Font(family=MARKER_FONT, size=12, weight="bold")
+        note_font = tkinter_font.Font(family=MARKER_FONT, size=10)
+        padding, line_gap = 12, 6
+
+        title_height = title_font.metrics("linespace")
+        note_height = note_font.metrics("linespace")
+        content_width = max([title_font.measure(title)] + [note_font.measure(line) for line in note_lines])
+        content_height = title_height + (line_gap + note_height * len(note_lines) if note_lines else 0)
+        tooltip_size = (content_width + padding * 2, content_height + padding * 2)
+        position = tooltip_placement(anchor, tooltip_size, (width, height))
+
+        corner = connector_corner(anchor, position, tooltip_size)
+        canvas.create_line(*anchor, *corner, fill=MARKER_ACCENT, width=2)
+        canvas.create_oval(
+            anchor_x - 5, anchor_y - 5, anchor_x + 5, anchor_y + 5, fill=MARKER_ACCENT, outline=MARKER_ACCENT
+        )
+
+        left, top = position
+        canvas.create_rectangle(
+            left,
+            top,
+            left + tooltip_size[0],
+            top + tooltip_size[1],
+            fill=PILL_BACKGROUND,
+            outline=MARKER_ACCENT,
+            width=2,
+        )
+        text_x, text_y = left + padding, top + padding
+        canvas.create_text(text_x, text_y, anchor="nw", text=title, fill=MARKER_ACCENT, font=title_font)
+        text_y += title_height + line_gap
+        for line in note_lines:
+            canvas.create_text(text_x, text_y, anchor="nw", text=line, fill=MARKER_FOREGROUND, font=note_font)
+            text_y += note_height
 
     @staticmethod
     def _draw_border(canvas, width: int, height: int, now: float) -> None:
@@ -471,10 +609,32 @@ def _read_commands(stream, commands: queue.Queue) -> None:
     commands.put(("stop", None))
 
 
+def _macos_appkit_available() -> bool:
+    """Click-through is mandatory for a fullscreen window — without AppKit the
+    child must stay in the small pill window that cannot block the desktop."""
+    try:
+        import AppKit  # noqa: F401
+
+        return True
+    except Exception:
+        return False
+
+
+def _macos_backing_scale() -> float:
+    """Capture pixels per Tk point of the main screen (2.0 on retina)."""
+    try:
+        import AppKit
+
+        return float(AppKit.NSScreen.mainScreen().backingScaleFactor()) or 1.0
+    except Exception:
+        return 1.0
+
+
 def run_overlay_child() -> None:
     """Entry point of the overlay child: Tk on THIS process's main thread."""
     _ensure_tcl_env()
-    overlay = StatusOverlay(pill_only=True)
+    fullscreen = sys.platform != "darwin" or _macos_appkit_available()
+    overlay = StatusOverlay(pill_only=not fullscreen, marker_scale=_macos_backing_scale())
     threading.Thread(target=_read_commands, args=(sys.stdin, overlay._commands), daemon=True).start()
     overlay._serve()
 

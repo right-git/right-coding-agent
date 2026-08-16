@@ -56,6 +56,8 @@ class CommandHandler:
             return self._toggle_sound(argument)
         if command == "/voice":
             return self._toggle_voice(argument)
+        if command == "/check":
+            return self._run_check()
         if command in ("/log-level", "/loglevel"):
             return self._switch_log_level(argument) if argument else self._print_log_level()
         if command == "/clear":
@@ -79,6 +81,7 @@ class CommandHandler:
             ("/paste", "attach an image from the clipboard (also Ctrl+V in many terminals)"),
             ("/sound [on|off]", "toggle the completion sound"),
             ("/voice [on|off]", "spoken replies on/off (push-to-talk is always on)"),
+            ("/check", "check macOS permissions and raise the missing consent dialogs"),
             ("/log-level [name]", "show or change the log level"),
             ("/clear", "clear screen and history"),
             ("/quit", "exit"),
@@ -87,6 +90,34 @@ class CommandHandler:
         for command, description in commands:
             self.console.print(f"  {command:<24} {description}", style="info")
         self.console.print()
+
+    # ----------------------------------------------------------- permissions
+
+    def _run_check(self, platform: str | None = None) -> None:
+        """`/check`: probe every OS permission the app needs and prompt for the missing ones."""
+        from src.utils import permissions
+
+        if (platform or sys.platform) != "darwin":
+            self.console.print("  no OS permission setup needed on this platform", style="info")
+            return None
+        self.console.print("  checking macOS permissions — grant any dialogs that appear:", style="info")
+        for status in permissions.check_permissions():
+            if status.granted is True:
+                icon, style = "✓", "success"
+            elif status.granted is False:
+                icon, style = "✗", "error"
+            else:
+                icon, style = "?", "info"
+            line = f"  {icon} {status.name} — {status.purpose}"
+            if status.granted is not True:
+                line += f" · System Settings → {status.settings_pane}"
+            self.console.print(line, style=style, markup=False, highlight=False)
+        self.console.print(
+            "  ? means the state cannot be read here — if the feature misbehaves, "
+            "enable it in the pane above. After granting anything new, restart the app.",
+            style="info",
+        )
+        return None
 
     # ---------------------------------------------------------------- models
 

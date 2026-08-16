@@ -25,7 +25,7 @@ from .detection import (
     shift_box,
 )
 from . import platforms
-from .overlay import TkOverlay
+from .overlay import default_overlay
 from .types import (
     Box,
     Detection,
@@ -85,7 +85,7 @@ class ComputerUse:
         self._locator = locator
         self.screen: ScreenBackend = screen or platforms.default_screen()
         self.pointer: PointerBackend = pointer or platforms.default_pointer()
-        self.overlay: OverlayBackend = overlay or TkOverlay()
+        self.overlay: OverlayBackend = overlay or default_overlay()
         self._clipboard = clipboard
         self.output_path = Path(output_path)
         self.mark_duration = mark_duration

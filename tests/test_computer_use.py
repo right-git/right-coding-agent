@@ -333,6 +333,41 @@ class OverlayHelperTests(unittest.TestCase):
 
         self.assertIsNone(overlay._thread)
 
+    def test_default_overlay_picks_the_backend_for_the_platform(self):
+        from src.llm.tools.computer.overlay import ChildMarkerOverlay, TkOverlay, default_overlay
+
+        with patch("src.llm.tools.computer.overlay.tk_thread_supported", return_value=True):
+            self.assertIsInstance(default_overlay(), TkOverlay)
+        with patch("src.llm.tools.computer.overlay.tk_thread_supported", return_value=False):
+            self.assertIsInstance(default_overlay(), ChildMarkerOverlay)
+
+    def test_child_marker_overlay_serializes_markers_to_the_status_child(self):
+        from src.llm.tools.computer.overlay import ChildMarkerOverlay
+        from src.llm.tools.computer.types import Marker
+
+        class FakeStatus:
+            def __init__(self):
+                self.shown = []
+                self.hidden = 0
+
+            def show_marker(self, payload):
+                self.shown.append(payload)
+
+            def hide_marker(self):
+                self.hidden += 1
+
+        status = FakeStatus()
+        overlay = ChildMarkerOverlay(status_overlay=status)
+        overlay.show(Marker(box=(10, 20, 110, 60), title="Кнопка", note="тут", duration=4.0, anchor=(60, 40)))
+        overlay.hide()
+        overlay.close()  # child lifecycle belongs to the status overlay — must not raise
+
+        self.assertEqual(
+            status.shown,
+            [{"box": [10, 20, 110, 60], "title": "Кнопка", "note": "тут", "duration": 4.0, "anchor": [60, 40]}],
+        )
+        self.assertEqual(status.hidden, 1)
+
     def test_wrap_note_wraps_long_lines_and_keeps_author_breaks(self):
         self.assertEqual(
             wrap_note("one two three\n\nfour", width=7),

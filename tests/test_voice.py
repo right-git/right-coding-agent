@@ -810,7 +810,14 @@ class OverlayChildProcessTests(unittest.TestCase):
     def test_commands_roundtrip_through_the_wire_format(self):
         from src.ui.overlay import decode_command, encode_command
 
-        cases = [("voice", "listening"), ("voice", None), ("computer", 3.0), ("stop", None)]
+        cases = [
+            ("voice", "listening"),
+            ("voice", None),
+            ("computer", 3.0),
+            ("marker", {"box": [10, 20, 30, 40], "title": "Кнопка", "note": "", "duration": 6.0, "anchor": None}),
+            ("marker", None),
+            ("stop", None),
+        ]
         for command, payload in cases:
             self.assertEqual(decode_command(encode_command(command, payload)), (command, payload))
         self.assertIsNone(decode_command("not json"))
@@ -828,14 +835,71 @@ class OverlayChildProcessTests(unittest.TestCase):
         decoded = [decode_command(line) for line in child.lines]
         self.assertEqual(decoded, [("voice", "listening"), ("voice", None)])
 
-    def test_computer_pings_are_dropped_on_macos(self):
-        # The child draws only the voice pill — there is no border to ping,
-        # and screen tools must not spawn a child for nothing.
+    def test_computer_pings_reach_the_child(self):
+        from src.ui.overlay import decode_command
+
         overlay, child = self.make_child_overlay()
         with patch("src.ui.overlay.tk_thread_supported", return_value=False):
-            overlay.ping_computer()
+            overlay.ping_computer(2.5)
+
+        self.assertEqual([decode_command(line) for line in child.lines], [("computer", 2.5)])
+
+    def test_markers_are_forwarded_and_hidden_through_the_child(self):
+        from src.ui.overlay import decode_command
+
+        overlay, child = self.make_child_overlay()
+        payload = {"box": [10, 20, 110, 60], "title": "Кнопка", "note": "тут", "duration": 6.0, "anchor": None}
+        with patch("src.ui.overlay.tk_thread_supported", return_value=False):
+            overlay.show_marker(payload)
+            overlay.hide_marker()
+
+        self.assertEqual(
+            [decode_command(line) for line in child.lines],
+            [("marker", payload), ("marker", None)],
+        )
+
+    def test_hiding_a_marker_with_nothing_running_spawns_nothing(self):
+        overlay, child = self.make_child_overlay()
+        with patch("src.ui.overlay.tk_thread_supported", return_value=False):
+            overlay.hide_marker()
 
         self.assertEqual(child.lines, [])
+
+    def test_marker_state_applies_and_expires(self):
+        from src.ui.overlay import StatusOverlay
+
+        overlay = StatusOverlay()
+        overlay._apply("marker", {"box": [1, 2, 3, 4], "duration": 5.0}, now=100.0)
+        self.assertTrue(overlay.marker_active(now=104.9))
+        self.assertFalse(overlay.marker_active(now=105.1))
+
+        overlay._apply("marker", None, now=104.0)
+        self.assertFalse(overlay.marker_active(now=104.0))
+
+    def test_marker_coordinates_are_scaled_from_capture_pixels(self):
+        # Retina capture is 2x the Tk point grid — the child divides by the
+        # screen's backing scale factor so boxes land on the right element.
+        from src.ui.overlay import scale_coords
+
+        self.assertEqual(scale_coords([100, 220, 300, 440], 2.0), [50.0, 110.0, 150.0, 220.0])
+        self.assertEqual(scale_coords([10, 20], 1.0), [10.0, 20.0])
+
+    def test_marker_geometry_helpers_stay_in_sync_with_the_canonical_copies(self):
+        from src.llm.tools.computer import overlay as marker_overlay
+        from src.ui import overlay as ui_overlay
+
+        self.assertEqual(
+            ui_overlay.wrap_note("one two three\n\nfour", 7),
+            marker_overlay.wrap_note("one two three\n\nfour", 7),
+        )
+        self.assertEqual(
+            ui_overlay.tooltip_placement((100, 100), (200, 80), (1920, 1080), offset=20, margin=10),
+            marker_overlay.tooltip_placement((100, 100), (200, 80), (1920, 1080), offset=20, margin=10),
+        )
+        self.assertEqual(
+            ui_overlay.connector_corner((0, 0), (50, 60), (200, 80)),
+            marker_overlay.connector_corner((0, 0), (50, 60), (200, 80)),
+        )
 
     def test_dead_child_disables_the_overlay(self):
         overlay, child = self.make_child_overlay()
