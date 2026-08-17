@@ -20,6 +20,7 @@ COMMANDS: dict[str, str] = {
     "/effort": "reasoning effort",
     "/temperature": "sampling temperature",
     "/paste": "attach a clipboard image",
+    "/copy": "copy the last answer / a code block",
     "/sound": "toggle the completion sound",
     "/voice": "voice mode (push-to-talk + TTS)",
     "/check": "check & request macOS permissions",
@@ -65,6 +66,9 @@ class CommandCompleter(Completer):
             return
         if command in ("/sound", "/voice"):
             yield from self._option_completions(word, ("on", "off"))
+            return
+        if command == "/copy":
+            yield from self._option_completions(word, ("code",))
             return
         if command in ("/log-level", "/loglevel"):
             levels = tuple(sorted(level.lower() for level in app_logging.VALID_LEVELS))

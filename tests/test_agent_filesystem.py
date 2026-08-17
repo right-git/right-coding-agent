@@ -1,3 +1,4 @@
+import os
 import unittest
 from io import StringIO
 from unittest.mock import AsyncMock, Mock
@@ -89,12 +90,61 @@ class ToolContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(isinstance(middleware, SummarizationMiddleware) for middleware in middlewares))
         self.assertIsInstance(middlewares[-1], MessageLogMiddleware)
 
-    def test_system_prompt_does_not_list_tools(self):
-        self.assertNotIn("## Tools", Prompts.right_coding_agent_sys)
-        self.assertNotIn("**read_file**", Prompts.right_coding_agent_sys)
-        self.assertNotIn("**write_file**", Prompts.right_coding_agent_sys)
-        self.assertNotIn("**edit_file**", Prompts.right_coding_agent_sys)
-        self.assertNotIn("**execute**", Prompts.right_coding_agent_sys)
+    async def test_system_prompt_carries_session_context(self):
+        agent = Agents(
+            [
+                LLMProvider(
+                    provider_name="openai",
+                    api_key="test-key",
+                    api_base="http://localhost",
+                )
+            ]
+        )
+        agent.ask_agent = AsyncMock(return_value={"messages": []})
+
+        await agent.right_coding_agent(
+            messages=[HumanMessage("hi")],
+            model="openai/gpt-4.1-mini",
+        )
+
+        prompt = agent.ask_agent.await_args.kwargs["system_prompt"]
+        self.assertIn("Session context:", prompt)
+        self.assertIn(os.getcwd(), prompt)
+        self.assertIn("tools are registered", prompt)
+
+    def test_session_context_is_stable_across_calls(self):
+        # The system prompt heads the provider prompt-cache prefix, so the
+        # context paragraph must not change between a session's turns.
+        first = Prompts.session_context(tool_count=5)
+        second = Prompts.session_context(tool_count=5)
+
+        self.assertEqual(first, second)
+        self.assertIn("The session started on", first)
+        self.assertIn("epoch", first)
+        self.assertIn("now()", first)
+        self.assertIn("5 tools are registered", first)
+
+    CORE_PROMPT_TOOLS = (
+        "bash",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "glob_files",
+        "grep_files",
+        "web_fetch",
+        "web_search",
+    )
+
+    def test_core_tools_named_in_the_system_prompt_stay_registered(self):
+        # The prompt promises these tools are callable without discovery, so
+        # a rename or removal in the registry must fail loudly here.
+        from src.llm.tools.meta.defaults import default_tools
+        from src.llm.tools.meta.registry import ToolRegistry
+
+        registry = ToolRegistry(default_tools())
+        for name in self.CORE_PROMPT_TOOLS:
+            self.assertIsNotNone(registry.get(name), f"{name} is promised in the prompt but not registered")
+            self.assertIn(f"{name}(", Prompts.right_coding_agent_sys)
 
 
 class ConversationStateTests(unittest.TestCase):
@@ -169,7 +219,11 @@ class ErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
 
 class ModelSelectionTests(unittest.TestCase):
     def test_available_models_include_default_model(self):
-        self.assertIn("google/gemini-3.7-flash", available_models)
+        # Seeded from LLM_DEFAULT_MODEL, so assert the invariant rather than
+        # a hardcoded id — the .env value is the user's to change.
+        from src.config.settings import settings
+
+        self.assertIn(settings.llm_default_model, available_models)
 
 
 class ChatUIRenderingTests(unittest.TestCase):

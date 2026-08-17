@@ -39,8 +39,9 @@ class DirectAgents(Agents):
         on_token=None,
     ):
         # Mirrors Agents.right_coding_agent so only the tool wiring differs.
+        session_context = Prompts.session_context(tool_count=len(DIRECT_TOOLS))
         return await self.ask_agent(
-            system_prompt=DIRECT_CODING_AGENT_SYS + (Prompts.voice_mode_suffix if voice_mode else ""),
+            system_prompt=DIRECT_CODING_AGENT_SYS + session_context + (Prompts.voice_mode_suffix if voice_mode else ""),
             model_name=model,
             agent_input={"messages": messages},
             tools=[*DIRECT_TOOLS],

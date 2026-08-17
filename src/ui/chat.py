@@ -52,6 +52,7 @@ class ChatUI:
         self.voice = None  # VoiceController once /voice enables it
         self.model_status: dict[str, tuple[str, float, str | None]] = {}  # name → (state, since, detail)
         self._type_ahead = ""  # keys typed during a turn, returned to the next prompt
+        self.last_answer = ""  # raw markdown of the latest answer, for /copy
         self.commands = CommandHandler(self)
 
     def set_model_catalog(self, catalog: dict[str, ModelInfo] | None) -> None:
@@ -414,6 +415,7 @@ class ChatUI:
         messages: list[HumanMessage | AIMessage | ToolMessage],
         skip_ids: set[str] | frozenset[str] = frozenset(),
     ):
+        answer_parts: list[str] = []
         for msg in messages:
             if getattr(msg, "id", None) in skip_ids:
                 continue  # already shown live by the turn stream
@@ -425,6 +427,7 @@ class ChatUI:
                     rendered_content = self._render_ai_content(msg.content)
                     if not rendered_content:
                         continue
+                    answer_parts.append(rendered_content)
                     self.console.print()
                     md = Markdown(rendered_content)
                     self.console.print(
@@ -438,6 +441,8 @@ class ChatUI:
 
             elif isinstance(msg, ToolMessage):
                 self._print_tool_result(msg)
+        if answer_parts:
+            self.last_answer = "\n\n".join(answer_parts)
 
     async def get_tool_approval(self, tool_calls: list[dict]) -> dict:
         """Show pending tool calls and ask user to approve, edit, or reject.

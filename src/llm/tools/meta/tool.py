@@ -33,6 +33,25 @@ from .sandbox import Interpreter
 MAX_RESULT_CHARS = 40_000
 MAX_ATTACHED_IMAGES = 6
 
+# A log line that is pure decoration ("=====", "-----", "* * *", …) carries
+# zero information and still costs tokens on the way back to the model, so
+# such lines are stripped mechanically — the prompt alone does not stop
+# every model from printing banner art.
+DECORATION_LINE_RE = re.compile(r"^[\s=\-*#~_.•⎯—│|+]{4,}$")
+
+
+def _strip_decoration(logs: list) -> tuple[list, int]:
+    """Logs without banner/divider lines, plus how many lines were removed."""
+    cleaned: list = []
+    removed = 0
+    for entry in logs:
+        lines = str(entry).splitlines()
+        kept = [line for line in lines if not DECORATION_LINE_RE.match(line)]
+        removed += len(lines) - len(kept)
+        if kept or not lines:
+            cleaned.append("\n".join(kept) if lines else entry)
+    return cleaned, removed
+
 
 def _clip(text: str) -> str:
     if len(text) <= MAX_RESULT_CHARS:
@@ -77,7 +96,8 @@ async def search_tools(query: str) -> str:
         [
             header,
             *(registry.brief(match) for match in matches),
-            "Fetch full contracts with get_tool([...]) — it takes several " "names at once — before calling the tools.",
+            "Call a tool straight away when its signature is self-explanatory; "
+            "fetch full contracts with get_tool([...]) — several names at once — for the rest.",
         ]
     )
 
@@ -141,20 +161,25 @@ async def run_tools(code: str) -> tuple[str, list[dict]]:
     This is your only wired-in tool; every capability (the web, files, the
     shell, the user's screen, ...) is a registered tool your script calls
     by bare name. Discovery happens in-script too: search_tools("a few
-    keywords") returns matching tools one per line as `signature — summary`
-    (print it to see it), and get_tool(["name", ...]) fetches full
+    keywords") returns matching tools one per line as `signature — summary`,
+    and get_tool(["name", ...]) fetches full
     contracts — they arrive in this result's `contracts` field
     automatically, so call it as a bare statement and never print or
-    return its value. A contract fetched by a script cannot steer later
-    lines of that same script (the code is already written), so a typical
-    first script is discovery — print(search_tools(...)) plus
-    get_tool([...]) — and the next script does the real work; skip
+    return its value. A listing line's signature is often all you need —
+    call such a tool right away, and reach for get_tool only when the
+    arguments need more detail than the signature shows. A contract
+    fetched by a script cannot steer later lines of that same script (the
+    code is already written), so when contracts are needed the usual shape
+    is one discovery script — search_tools(...) plus get_tool([...]) in
+    the same script — and the next script does the real work; skip
     discovery entirely for tools whose contracts you already see in the
     conversation. Tool calls look synchronous and are awaited for you, and
     intermediate data never enters the conversation — only what you return
-    or print comes back. Prefer one script over many separate tool calls
-    whenever results feed each other, need filtering, or can run in
-    parallel.
+    or print comes back. Batch aggressively: a small task belongs in ONE
+    script — create the directory tree, write every file, and run the one
+    verification check in the same run — because every extra run_tools
+    call re-sends the whole conversation at full price. Split only when a
+    later step genuinely depends on output you have not seen yet.
 
     The language is a Python subset:
     - statements: assignment, if/elif/else, for, while, break/continue,
@@ -165,7 +190,13 @@ async def run_tools(code: str) -> tuple[str, list[dict]]:
       range, abs, round, min, max, sum, sorted, reversed, enumerate, zip,
       any, all, str, int, float, bool, list, dict, set, tuple, random,
       randint, choice, now;
-    - print(...) records a log line that is returned to you;
+    - a bare tool call on its own line logs its result automatically,
+      REPL-style — no print() needed around tool calls; assign to a
+      variable to keep a result out of the logs;
+    - print(...) records a log line that is returned to you — logs are
+      read by you, not the user, so print only the data your next step
+      needs: never banners, decorated headers, progress reports, or
+      celebration output (the user reads your final chat answer instead);
     - sleep(seconds) waits at zero token cost — poll a slow job with a while
       loop plus sleep instead of checking from the conversation;
     - parallel(tool_a(...), tool_b(...), ...) runs direct tool calls
@@ -201,6 +232,11 @@ async def run_tools(code: str) -> tuple[str, list[dict]]:
         interpreter = Interpreter(table)
         with collecting_images() as images, counting_script_calls() as calls:
             outcome = await interpreter.run(code)
+        outcome["logs"], removed_decoration = _strip_decoration(outcome["logs"])
+        if removed_decoration:
+            outcome["removed_decoration"] = (
+                f"{removed_decoration} banner/divider line(s) stripped from logs — print data, not decorations"
+            )
         if contracts:
             outcome["contracts"] = contracts
         if len(images) > MAX_ATTACHED_IMAGES:

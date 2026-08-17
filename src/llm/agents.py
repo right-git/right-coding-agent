@@ -6,7 +6,7 @@ from src.config.prompts import Prompts
 
 from .client import LLMClient
 from .middlewares import AttachedImagesMiddleware, MessageLogMiddleware
-from .tools import META_TOOLS
+from .tools import META_TOOLS, get_registry
 
 
 class Agents(LLMClient):
@@ -29,8 +29,9 @@ class Agents(LLMClient):
             *META_TOOLS,
         ]
 
+        session_context = Prompts.session_context(tool_count=len(get_registry().all_tools()))
         response = await self.ask_agent(
-            system_prompt=Prompts.coding_system(voice_mode),
+            system_prompt=Prompts.coding_system(voice_mode, context=session_context),
             model_name=model,
             agent_input={"messages": messages},
             tools=tools,

@@ -13,11 +13,13 @@ calls. Unknown models (catalog empty or entry without a capability list)
 are allowed — the catalog's absence must not lock the user out.
 """
 
+import re
 import sys
 
 from src.config.logging import app_logging
 
 EFFORT_LEVELS = ("minimal", "low", "medium", "high")
+CODE_FENCE_RE = re.compile(r"```[^\n]*\n(.*?)(?:```|\Z)", re.DOTALL)
 CLEAR_WORDS = ("none", "off", "default")
 MAX_LISTED_MATCHES = 8
 MAX_SEARCH_RESULTS = 15
@@ -52,6 +54,8 @@ class CommandHandler:
             return self._switch_temperature(argument)
         if command == "/paste":
             return self._paste_image()
+        if command == "/copy":
+            return self._copy(argument)
         if command == "/sound":
             return self._toggle_sound(argument)
         if command == "/voice":
@@ -79,6 +83,7 @@ class CommandHandler:
             ("/effort [level]", f"reasoning effort: {', '.join(EFFORT_LEVELS)}, or none"),
             ("/temperature [value]", "sampling temperature 0..2, or none"),
             ("/paste", "attach an image from the clipboard (also Ctrl+V in many terminals)"),
+            ("/copy [code [n]]", "copy the last answer — or its n-th code block — to the clipboard"),
             ("/sound [on|off]", "toggle the completion sound"),
             ("/voice [on|off]", "spoken replies on/off (needs ENABLE_VOICE_MODEL=1)"),
             ("/check", "check macOS permissions and raise the missing consent dialogs"),
@@ -335,6 +340,70 @@ class CommandHandler:
             return None
         self.ui.temperature = value
         self.console.print(f"  temperature set to {value:g}", style="success")
+        return None
+
+    # -------------------------------------------------------------- copying
+
+    def _set_clipboard(self, text: str) -> bool:
+        try:
+            import pyperclip
+
+            pyperclip.copy(text)
+            return True
+        except Exception as error:
+            self.console.print(f"  clipboard unavailable: {error}", style="error")
+            return False
+
+    def _copy(self, argument: str) -> None:
+        """`/copy`: the whole last answer; `/copy code [n]`: one of its code blocks."""
+        answer = self.ui.last_answer
+        if not answer:
+            self.console.print("  nothing to copy yet — no answer in this session", style="error")
+            return None
+        kind, _, index_text = argument.partition(" ")
+        if kind.lower() not in ("", "code"):
+            self.console.print(
+                "  usage: /copy — the whole last answer; /copy code [n] — its n-th code block",
+                style="error",
+            )
+            return None
+        if kind.lower() != "code":
+            if self._set_clipboard(answer):
+                self.console.print(f"  copied the last answer ({len(answer)} chars)", style="success")
+            return None
+
+        blocks = [block.strip("\n") for block in CODE_FENCE_RE.findall(answer) if block.strip()]
+        if not blocks:
+            self.console.print("  the last answer has no fenced code blocks", style="error")
+            return None
+        if index_text.strip():
+            try:
+                index = int(index_text)
+            except ValueError:
+                self.console.print(f"  invalid block number: {index_text}", style="error")
+                return None
+            if not 1 <= index <= len(blocks):
+                self.console.print(
+                    f"  block number out of range — the answer has {len(blocks)} code block(s)",
+                    style="error",
+                )
+                return None
+        elif len(blocks) == 1:
+            index = 1
+        else:
+            self.console.print(f"  {len(blocks)} code blocks — pick one with /copy code <n>:", style="info")
+            for number, block in enumerate(blocks, 1):
+                first_line = block.strip().splitlines()[0]
+                self.console.print(
+                    f"    {number}. {first_line[:60]} ({len(block.splitlines())} lines)",
+                    style="info",
+                    markup=False,
+                    highlight=False,
+                )
+            return None
+        block = blocks[index - 1]
+        if self._set_clipboard(block):
+            self.console.print(f"  copied code block {index} ({len(block.splitlines())} lines)", style="success")
         return None
 
     # --------------------------------------------------------------- images

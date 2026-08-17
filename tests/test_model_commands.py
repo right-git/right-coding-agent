@@ -425,3 +425,80 @@ class DefaultParameterDisplayTests(unittest.TestCase):
         ui.handle_command("/effort")
 
         self.assertIn("the provider decides", ui.console.export_text())
+
+
+class CopyCommandTests(unittest.TestCase):
+    ANSWER = "Use this:\n\n```python\nprint('hi')\n```\n\nand then:\n\n```bash\nls -la\n```\n"
+
+    def make_ui_with_answer(self, answer):
+        ui = make_ui()
+        ui.last_answer = answer
+        copied = []
+        ui.commands._set_clipboard = lambda text: copied.append(text) or True
+        return ui, copied
+
+    def test_copy_without_an_answer_reports_it(self):
+        ui, copied = self.make_ui_with_answer("")
+
+        ui.handle_command("/copy")
+
+        self.assertEqual(copied, [])
+        self.assertIn("nothing to copy", ui.console.export_text())
+
+    def test_copy_puts_the_whole_answer_in_the_clipboard(self):
+        ui, copied = self.make_ui_with_answer(self.ANSWER)
+
+        ui.handle_command("/copy")
+
+        self.assertEqual(copied, [self.ANSWER])
+        self.assertIn("copied the last answer", ui.console.export_text())
+
+    def test_copy_code_with_a_single_block_copies_it(self):
+        ui, copied = self.make_ui_with_answer("look:\n```js\nalert(1)\n```\n")
+
+        ui.handle_command("/copy code")
+
+        self.assertEqual(copied, ["alert(1)"])
+
+    def test_copy_code_lists_blocks_when_ambiguous(self):
+        ui, copied = self.make_ui_with_answer(self.ANSWER)
+
+        ui.handle_command("/copy code")
+
+        self.assertEqual(copied, [])
+        rendered = ui.console.export_text()
+        self.assertIn("2 code blocks", rendered)
+        self.assertIn("print('hi')", rendered)
+        self.assertIn("ls -la", rendered)
+
+    def test_copy_code_by_number(self):
+        ui, copied = self.make_ui_with_answer(self.ANSWER)
+
+        ui.handle_command("/copy code 2")
+
+        self.assertEqual(copied, ["ls -la"])
+
+    def test_copy_code_rejects_out_of_range_numbers(self):
+        ui, copied = self.make_ui_with_answer(self.ANSWER)
+
+        ui.handle_command("/copy code 5")
+
+        self.assertEqual(copied, [])
+        self.assertIn("out of range", ui.console.export_text())
+
+    def test_copy_code_without_blocks_reports_it(self):
+        ui, copied = self.make_ui_with_answer("plain prose, no code")
+
+        ui.handle_command("/copy code")
+
+        self.assertEqual(copied, [])
+        self.assertIn("no fenced code blocks", ui.console.export_text())
+
+    def test_print_response_remembers_the_answer_for_copy(self):
+        from langchain_core.messages import AIMessage
+
+        ui = make_ui()
+
+        ui.print_response([AIMessage("Готово: файл создан.")])
+
+        self.assertEqual(ui.last_answer, "Готово: файл создан.")

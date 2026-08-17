@@ -104,7 +104,8 @@ class DirectAgentContractTests(unittest.IsolatedAsyncioTestCase):
             [tool_obj.name for tool_obj in kwargs["tools"]],
             EXPECTED_DIRECT_NAMES,
         )
-        self.assertEqual(kwargs["system_prompt"], DIRECT_CODING_AGENT_SYS)
+        self.assertTrue(kwargs["system_prompt"].startswith(DIRECT_CODING_AGENT_SYS))
+        self.assertIn("Session context:", kwargs["system_prompt"])
         self.assertIsInstance(kwargs["middlewares"][-1], MessageLogMiddleware)
 
 

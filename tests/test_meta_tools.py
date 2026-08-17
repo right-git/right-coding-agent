@@ -318,6 +318,47 @@ class MetaToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("caught:", outcome["result"])
         self.assertIn("kaput", outcome["result"])
 
+    async def test_bare_tool_calls_log_their_results_repl_style(self):
+        outcome = json.loads(await run_tools.ainvoke({"code": 'fetch_page("a")\nreturn "done"'}))
+
+        self.assertEqual(outcome["logs"], ["page:a:5"])
+        self.assertEqual(outcome["result"], "done")
+
+    async def test_assigned_tool_calls_stay_out_of_the_logs(self):
+        outcome = json.loads(await run_tools.ainvoke({"code": 'page = fetch_page("a")\nreturn len(page)'}))
+
+        self.assertEqual(outcome["logs"], [])
+        self.assertEqual(outcome["result"], 8)
+
+    async def test_a_final_bare_tool_call_is_not_reported_twice(self):
+        outcome = json.loads(await run_tools.ainvoke({"code": 'fetch_page("a")'}))
+
+        self.assertEqual(outcome["result"], "page:a:5")
+        self.assertEqual(outcome["logs"], [])
+
+    async def test_decoration_only_log_lines_are_stripped(self):
+        outcome = json.loads(
+            await run_tools.ainvoke(
+                {
+                    "code": (
+                        'print("=" * 60)\n'
+                        'print("FILE REPORT")\n'
+                        'print("----------")\n'
+                        'print("3 files written")\n'
+                    )
+                }
+            )
+        )
+
+        self.assertEqual(outcome["logs"], ["FILE REPORT", "3 files written"])
+        self.assertIn("banner/divider", outcome["removed_decoration"])
+
+    async def test_informative_logs_are_not_stripped(self):
+        outcome = json.loads(await run_tools.ainvoke({"code": 'print("a = 1")\nprint("- item: ok")\nreturn 2'}))
+
+        self.assertEqual(outcome["logs"], ["a = 1", "- item: ok"])
+        self.assertNotIn("removed_decoration", outcome)
+
     async def test_run_tools_reports_syntax_errors(self):
         outcome = json.loads(await run_tools.ainvoke({"code": "return ((("}))
 

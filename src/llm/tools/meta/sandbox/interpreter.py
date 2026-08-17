@@ -98,6 +98,8 @@ class Interpreter:
 
         try:
             result = await asyncio.wait_for(_exec(), timeout=MAX_WALL_TIME)
+            if result is not None and self.logs and self.logs[-1] == str(result):
+                self.logs.pop()  # a bare tool call as the last statement is already the result
             return {"result": result, "logs": self.logs, "error": None}
         except SandboxError as e:
             return {"result": None, "logs": self.logs, "error": f"SandboxError: {e}"}
@@ -136,7 +138,9 @@ class Interpreter:
                     # documentation it reads at that moment, so teach the
                     # way out instead of just refusing.
                     raise SandboxError(
-                        "imports are not allowed in run_tools scripts — call bash(...) for shell/OS work instead"
+                        "imports are not allowed in run_tools scripts — the pre-wired tools cover it: "
+                        "bash(...) for shell/OS work, write_file/read_file/glob_files for files "
+                        "(write_file creates parent directories and expands ~ itself)"
                     )
                 raise SandboxError(f"'{type(node).__name__}' is not allowed")
             if isinstance(node, ast.Attribute):
@@ -144,6 +148,13 @@ class Interpreter:
                     raise SandboxError(f"attribute '{node.attr}' is forbidden")
             if isinstance(node, ast.Name) and node.id.startswith("__"):
                 raise SandboxError(f"name '{node.id}' is forbidden")
+
+    def _is_tool_call(self, node) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and (node.func.id in self.tools or node.func.id in ("parallel", "run_functions_in_parallel"))
+        )
 
     def _tick(self):
         self.ops += 1
@@ -163,6 +174,12 @@ class Interpreter:
         if t is ast.Expr:
             val = await self._eval(node.value, scope, env)
             scope["_"] = val
+            # REPL-style: a bare tool call on its own line logs its result.
+            # Models habitually expect tool output to come back without an
+            # explicit print — before this, `bash("ls")` mid-script silently
+            # discarded its output. Assignments stay silent on purpose.
+            if val is not None and self._is_tool_call(node.value):
+                self.logs.append(str(val))
 
         elif t is ast.Assign:
             val = await self._eval(node.value, scope, env)

@@ -21,3 +21,4 @@ testscripts/
 .venv-chatterbox/
 logs.*
 models/
+.DS_Store
