@@ -276,6 +276,73 @@ class UsageReportingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(session_arg, session)
         self.assertEqual(session.total_tokens, 280)
 
+    async def test_usage_counts_streamed_messages_summarization_dropped_from_the_state(self):
+        # Mid-turn summarization once collapsed 51 messages to 11 and the
+        # footer priced a $0.70 turn at $0.23. The live stream is the
+        # complete record, so calls dropped from the final state must still
+        # be counted — and cache reads must discount the cost.
+        dropped = AIMessage(
+            content="early step",
+            id="early",
+            usage_metadata={"input_tokens": 5_000, "output_tokens": 900, "total_tokens": 5_900},
+        )
+        kept = AIMessage(
+            content="done",
+            id="late",
+            usage_metadata={
+                "input_tokens": 1_000,
+                "output_tokens": 100,
+                "total_tokens": 1_100,
+                "input_token_details": {"cache_read": 800},
+            },
+        )
+
+        async def stream_then_answer(**kwargs):
+            kwargs["on_message"](dropped)
+            kwargs["on_message"](kept)
+            return {"messages": [HumanMessage("test"), kept]}
+
+        agents = Mock()
+        agents.right_coding_agent = AsyncMock(side_effect=stream_then_answer)
+
+        ui = Mock()
+        ui.turn_stream.return_value = nullcontext()
+        ui.run_cancellable = lambda coro: coro
+        ui.has_visible_output.return_value = True
+
+        info = ModelInfo(
+            id="anthropic/claude-haiku-4.5",
+            name="Haiku",
+            context_length=200_000,
+            prompt_price=1e-6,
+            completion_price=5e-6,
+            cache_read_price=1e-7,
+        )
+        catalog = Mock()
+        catalog.get = AsyncMock(return_value=info)
+        session = SessionUsage()
+
+        with patch("src.main.logger"):
+            await process_user_turn(
+                agents=agents,
+                ui=ui,
+                messages=[],
+                model="anthropic/claude-haiku-4.5",
+                user_content="test",
+                catalog=catalog,
+                session_usage=session,
+            )
+
+        turn, _, cost, _, _ = ui.print_usage.call_args.args
+        self.assertEqual(turn.input_tokens, 6_000)
+        self.assertEqual(turn.output_tokens, 1_000)
+        self.assertEqual(turn.calls, 2)
+        self.assertEqual(turn.cached_input_tokens, 800)
+        self.assertAlmostEqual(cost, 5_200 * 1e-6 + 800 * 1e-7 + 1_000 * 5e-6)
+        self.assertAlmostEqual(ui.print_usage.call_args.kwargs["saved"], 800 * (1e-6 - 1e-7))
+        self.assertEqual(session.cached_tokens, 800)
+        self.assertAlmostEqual(session.saved, 800 * (1e-6 - 1e-7))
+
     async def test_usage_reporting_is_skipped_without_a_catalog(self):
         agents = Mock()
         agents.right_coding_agent = AsyncMock(return_value={"messages": [HumanMessage("test"), AIMessage("done")]})

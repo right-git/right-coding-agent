@@ -56,8 +56,10 @@ class DirectAgents(Agents):
                         model_name="openai/gpt-4.1-mini",
                         provider=self.providers[0],
                     ),
-                    trigger=("tokens", 40000),
-                    keep=("messages", 10),
+                    # Kept identical to Agents.right_coding_agent (see the
+                    # rationale there) so the comparison stays fair.
+                    trigger=("tokens", 100000),
+                    keep=("messages", 20),
                 ),
                 MessageLogMiddleware(),
             ],

@@ -19,6 +19,9 @@ class TurnUsage:
     calls: int = 0
     tool_calls: int = 0
     script_tool_calls: int = 0
+    # Provider-reported cache reads (`input_token_details.cache_read`) — a
+    # subset of `input_tokens` billed at the cache-read price, not full price.
+    cached_input_tokens: int = 0
 
     @property
     def total_tokens(self) -> int:

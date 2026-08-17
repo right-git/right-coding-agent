@@ -28,16 +28,28 @@ def turn_usage_from_messages(
     messages keep their usage_metadata and would be double-counted.
     `tool_calls` counts the model's direct calls; `script_tool_calls` sums
     the registry-tool invocations run_tools results report for their scripts.
+
+    Callers may concatenate the live-streamed messages with the final state:
+    mid-turn summarization drops early messages from the final state (which
+    once hid 21 of a turn's 28 calls, reporting $0.23 for a $0.70 turn), so
+    the stream is the complete record and duplicates are skipped here by
+    message id (or object identity when a message has no id).
     """
     input_total = 0
     output_total = 0
+    cached_total = 0
     context = 0
     calls = 0
     tool_calls = 0
     script_tool_calls = 0
+    seen: set = set()
 
     for message in messages:
         identifier = getattr(message, "id", None)
+        key = identifier or ("obj", id(message))
+        if key in seen:
+            continue
+        seen.add(key)
         if identifier and identifier in previous_ids:
             continue
         if isinstance(message, ToolMessage):
@@ -51,6 +63,8 @@ def turn_usage_from_messages(
             continue
         input_tokens = int(usage.get("input_tokens", 0) or 0)
         output_tokens = int(usage.get("output_tokens", 0) or 0)
+        details = usage.get("input_token_details") or {}
+        cached_total += int(details.get("cache_read", 0) or 0)
         input_total += input_tokens
         output_total += output_tokens
         calls += 1
@@ -66,6 +80,7 @@ def turn_usage_from_messages(
         calls=calls,
         tool_calls=tool_calls,
         script_tool_calls=script_tool_calls,
+        cached_input_tokens=cached_total,
     )
 
 
@@ -75,7 +90,9 @@ class SessionUsage:
     def __init__(self) -> None:
         self.input_tokens = 0
         self.output_tokens = 0
+        self.cached_tokens = 0
         self.cost = 0.0
+        self.saved = 0.0
         self.turns = 0
         self.unpriced_turns = 0
         self.duration = 0.0
@@ -84,13 +101,16 @@ class SessionUsage:
     def total_tokens(self) -> int:
         return self.input_tokens + self.output_tokens
 
-    def add(self, turn: TurnUsage, cost: float | None, duration: float = 0.0) -> None:
+    def add(self, turn: TurnUsage, cost: float | None, duration: float = 0.0, saved: float | None = None) -> None:
         if turn.calls == 0:
             return
         self.turns += 1
         self.input_tokens += turn.input_tokens
         self.output_tokens += turn.output_tokens
+        self.cached_tokens += turn.cached_input_tokens
         self.duration += max(0.0, duration)
+        if saved:
+            self.saved += saved
         if cost is None:
             self.unpriced_turns += 1
         else:

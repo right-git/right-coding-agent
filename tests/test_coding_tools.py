@@ -146,6 +146,40 @@ class GlobAndGrepTests(FileServiceTestCase):
         self.assertIn("No matches", self.service.grep("unicorn", str(self.root)))
 
 
+class HomeExpansionTests(FileServiceTestCase):
+    """`~` paths reach the real home directory, never a literal `./~` dir.
+
+    The unexpanded form once made write() report success into `./~/...`
+    while the shell (which does expand `~`) saw nothing — the agent rebuilt
+    the same files three times before finding out.
+    """
+
+    def home(self):
+        # Path.expanduser reads HOME on POSIX and USERPROFILE on Windows.
+        return patch.dict("os.environ", {"HOME": str(self.root), "USERPROFILE": str(self.root)})
+
+    def test_write_expands_tilde_and_reports_the_resolved_path(self):
+        with self.home():
+            report = self.service.write("~/blog/index.html", "<html>\n")
+
+        target = self.root / "blog" / "index.html"
+        self.assertEqual(target.read_text(encoding="utf-8"), "<html>\n")
+        self.assertIn(str(target.resolve()), report)
+        self.assertNotIn("~", report)
+
+    def test_read_edit_glob_and_grep_expand_tilde(self):
+        self.make("notes/todo.txt", "alpha\n")
+
+        with self.home():
+            self.assertIn("alpha", self.service.read("~/notes/todo.txt"))
+            edit_report = self.service.edit("~/notes/todo.txt", "alpha", "beta")
+            self.assertIn("todo.txt", self.service.glob("**/todo.txt", "~"))
+            self.assertIn("beta", self.service.grep("beta", "~"))
+
+        self.assertIn("1 occurrence", edit_report)
+        self.assertNotIn("~", edit_report)
+
+
 class CommandRunnerTests(unittest.TestCase):
     def test_stdout_comes_back(self):
         runner = CommandRunner()

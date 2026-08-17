@@ -47,8 +47,14 @@ class Agents(LLMClient):
                         model_name="openai/gpt-4.1-mini",
                         provider=self.providers[0],
                     ),
-                    trigger=("tokens", 40000),
-                    keep=("messages", 10),
+                    # Deliberately high: every mid-turn summarization rewrites
+                    # history, which breaks the provider prompt-cache prefix
+                    # (cached re-reads cost ~10% of fresh input, so a long
+                    # tool tail is cheap to keep) and loses task detail while
+                    # the task is still running. Summarize only when the
+                    # window genuinely needs the room.
+                    trigger=("tokens", 100000),
+                    keep=("messages", 20),
                 ),
                 MessageLogMiddleware(),
             ],

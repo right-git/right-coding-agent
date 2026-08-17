@@ -66,29 +66,50 @@ async def report_usage(
     response_messages,
     previous_ids: frozenset[str],
     duration: float | None = None,
+    streamed_messages: list | None = None,
+    cache_writes_expected: bool = False,
 ) -> None:
     """Print the context/token/cost/time footer for one finished turn.
 
-    Reporting must never break a turn that already succeeded, so every
-    failure here is logged and swallowed.
+    `streamed_messages` is the turn's live message stream — the complete
+    record even when mid-turn summarization dropped early messages from the
+    final state (accounting once missed 21 of 28 calls without it); the two
+    lists are concatenated and deduplicated by id in
+    `turn_usage_from_messages`. `cache_writes_expected` says the client
+    requested prompt caching for this model, so fresh input is billed at the
+    cache-write price and `saved` is the net effect vs no caching — negative
+    when a turn wrote to the cache but read nothing back. Reporting must
+    never break a turn that already succeeded, so every failure here is
+    logged and swallowed.
     """
     if catalog is None or session_usage is None:
         return
     try:
-        turn = turn_usage_from_messages(response_messages, previous_ids)
+        turn = turn_usage_from_messages([*(streamed_messages or []), *response_messages], previous_ids)
         model_info = await catalog.get(model)
-        cost = (
-            model_info.cost_of(turn.input_tokens, turn.output_tokens) if model_info is not None and turn.calls else None
-        )
-        session_usage.add(turn, cost, duration or 0.0)
-        ui.print_usage(turn, model_info, cost, session_usage, duration)
+        cost = saved = None
+        if model_info is not None and turn.calls:
+            cost = model_info.cost_of(
+                turn.input_tokens,
+                turn.output_tokens,
+                turn.cached_input_tokens,
+                assume_cache_writes=cache_writes_expected,
+            )
+            baseline = model_info.cost_of(turn.input_tokens, turn.output_tokens)
+            if cost is not None and baseline is not None:
+                saved = baseline - cost
+        session_usage.add(turn, cost, duration or 0.0, saved=saved)
+        ui.print_usage(turn, model_info, cost, session_usage, duration, saved=saved)
         logger.info(
-            "Turn usage model [{}] input [{}] output [{}] context [{}] " "cost [{}] duration [{}] session_tokens [{}]",
+            "Turn usage model [{}] input [{}] output [{}] cached [{}] context [{}] "
+            "cost [{}] saved [{}] duration [{}] session_tokens [{}]",
             model,
             turn.input_tokens,
             turn.output_tokens,
+            turn.cached_input_tokens,
             turn.context_tokens,
             cost,
+            saved,
             duration,
             session_usage.total_tokens,
         )
@@ -153,6 +174,10 @@ async def process_user_turn(
 ) -> list[HumanMessage | AIMessage | ToolMessage]:
     started = time.perf_counter()
     voice_mode = getattr(ui, "voice_active", False)
+    try:
+        cache_writes_expected = bool(agents.wants_prompt_cache(agents.get_default_provider(), model))
+    except Exception:
+        cache_writes_expected = False
     base_messages = trim_incomplete_tool_calls(messages)
     working_messages = [*base_messages, HumanMessage(user_content)]
     shown_count = len(working_messages)
@@ -165,10 +190,24 @@ async def process_user_turn(
     )
 
     printed_ids: set[str] = set()
+    streamed_messages: list = []
+
+    def collecting(handler):
+        """Tee every streamed message into our own list: summarization can
+        drop early messages from the final state mid-turn, and usage
+        accounting must still see them."""
+
+        def on_collected(message):
+            streamed_messages.append(message)
+            if handler is not None:
+                handler(message)
+
+        return on_collected
 
     try:
         with ui.turn_stream() as stream:
             on_message, on_token = turn_callbacks(ui, stream)
+            on_message = collecting(on_message)
             response = await ui.run_cancellable(
                 agents.right_coding_agent(
                     messages=working_messages,
@@ -197,6 +236,7 @@ async def process_user_turn(
             ]
             with ui.turn_stream() as stream:
                 on_message, on_token = turn_callbacks(ui, stream)
+                on_message = collecting(on_message)
                 response = await ui.run_cancellable(
                     agents.right_coding_agent(
                         messages=retry_messages,
@@ -256,6 +296,8 @@ async def process_user_turn(
                 response_messages=raw_messages,
                 previous_ids=previous_ids,
                 duration=time.perf_counter() - started,
+                streamed_messages=streamed_messages,
+                cache_writes_expected=cache_writes_expected,
             )
             ui.finish_voice_turn()
             ui.notify_done()
@@ -273,6 +315,8 @@ async def process_user_turn(
             response_messages=raw_messages,
             previous_ids=previous_ids,
             duration=time.perf_counter() - started,
+            streamed_messages=streamed_messages,
+            cache_writes_expected=cache_writes_expected,
         )
         ui.finish_voice_turn()
         ui.notify_done()

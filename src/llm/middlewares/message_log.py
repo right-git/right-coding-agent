@@ -62,6 +62,11 @@ def serialize_message(message: Any, max_chars: int = MAX_TEXT_CHARS) -> dict:
                 "input_tokens": usage.get("input_tokens"),
                 "output_tokens": usage.get("output_tokens"),
             }
+            # Cache reads make or break the cost of a tool loop; without
+            # them in the log, a cache regression is invisible in forensics.
+            details = usage.get("input_token_details") or {}
+            if details.get("cache_read"):
+                entry["usage"]["cache_read"] = details.get("cache_read")
     if isinstance(message, ToolMessage):
         entry["tool_call_id"] = message.tool_call_id
         if message.name:

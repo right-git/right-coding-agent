@@ -1,0 +1,7 @@
+{
+  "_comment": "Per-model provider routing pins for OpenRouter requests (see src/config/routing.py). Keys are model-id prefixes, longest match wins; values are OpenRouter provider slugs (variant tags like google-vertex/global allowed) sent as provider.order. Prompt caches are per-endpoint, so models with caching must stick to one provider or cache hits become a lottery of full-price calls plus write premiums. An empty list disables the pin for that prefix; fallbacks to other providers stay enabled on outages.",
+  "_comment_choices": "anthropic: single cache domain at base price (Bedrock/Vertex have per-region caches, regional ones +10%). google: Vertex global is half the AI Studio price at equal uptime (checked 2026-08-17), pinned to the standard tier so flex/priority never surprise. openai: first-party endpoint, same price as Azure, keeps implicit caching on one endpoint.",
+  "anthropic/": ["anthropic"],
+  "google/": ["google-vertex/global"],
+  "openai/": ["openai"]
+}

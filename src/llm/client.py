@@ -11,6 +11,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.types import Command
 from src.config.logging import logger
+from src.config.routing import load_provider_pins, provider_order_for
 from .types import AgentTool, LLMProvider, T
 
 
@@ -21,11 +22,15 @@ class LLMClient:
         num_retries: int = 3,
         timeout: int = 30,
         cooldown_time: int = 5,
+        provider_pins: dict[str, list[str]] | None = None,
     ):
         self.providers = list(providers)
         self.num_retries = num_retries
         self.timeout = timeout
         self.cooldown_time = cooldown_time
+        # Model-prefix → OpenRouter provider.order, from provider_pins.json
+        # unless injected (the test seam).
+        self.provider_pins = load_provider_pins() if provider_pins is None else dict(provider_pins)
         self.checkpointer = MemorySaver(serde=JsonPlusSerializer(pickle_fallback=True))
         self._agent_cache: dict[str, Any] = {}
 
@@ -81,6 +86,31 @@ class LLMClient:
             # usage footer goes blank.
             client_kwargs["stream_usage"] = True
 
+        extra_body: dict[str, Any] = {}
+        if self.wants_prompt_cache(provider, model_name):
+            # Anthropic models cache only when asked. A root-level
+            # cache_control makes OpenRouter put the breakpoint on the newest
+            # cacheable block and advance it as the conversation grows, so
+            # every model call in a tool loop re-reads the previous call's
+            # prefix at the cache-read price (0.1x for Claude) instead of
+            # full price. OpenAI and Gemini models cache implicitly and never
+            # see this flag. Measured on the 2026-08-17 benchmark turn: the
+            # missing flag alone was ~$0.42 of a $0.70 turn.
+            extra_body["cache_control"] = {"type": "ephemeral"}
+        if self._is_openrouter(provider):
+            # Routing pins from provider_pins.json. Prompt caches are
+            # PER-ENDPOINT — OpenRouter serves one model from many endpoints
+            # (Bedrock alone has three regions, each an isolated cache) — so
+            # cached models must stick to one provider or hits become a
+            # lottery of full-price calls plus write premiums (observed live
+            # 2026-08-17). Fallbacks stay allowed: an outage costs cache
+            # misses, not availability.
+            order = provider_order_for(model_name, self.provider_pins)
+            if order:
+                extra_body["provider"] = {"order": order}
+        if extra_body:
+            client_kwargs["extra_body"] = extra_body
+
         if provider.provider_name == "azure_openai":
             if not provider.api_base:
                 raise ValueError("api_base is required for azure_openai provider")
@@ -94,6 +124,19 @@ class LLMClient:
             client_kwargs["base_url"] = self.fix_base(provider.api_base)
 
         return client_kwargs
+
+    @staticmethod
+    def _is_openrouter(provider: LLMProvider) -> bool:
+        return "openrouter" in (provider.api_base or "").lower()
+
+    @classmethod
+    def wants_prompt_cache(cls, provider: LLMProvider, model_name: str) -> bool:
+        """True for Anthropic models routed through OpenRouter — the one
+        combination where prompt caching needs an explicit opt-in. Public
+        because usage reporting asks it too: when caching is requested, every
+        uncached input token is also written to the cache, and the cost
+        estimate must bill those at the cache-write price."""
+        return cls._is_openrouter(provider) and model_name.startswith("anthropic/")
 
     def build_chat_model(
         self,

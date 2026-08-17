@@ -109,6 +109,50 @@ class TurnUsageTests(unittest.TestCase):
 
         self.assertEqual(usage.script_tool_calls, 2)
 
+    def test_duplicate_messages_are_counted_once(self):
+        message = ai("dup", 100, 10)
+
+        usage = turn_usage_from_messages([message, message, ai("dup", 100, 10)])
+
+        self.assertEqual(usage.input_tokens, 100)
+        self.assertEqual(usage.calls, 1)
+
+    def test_anonymous_duplicates_are_deduped_by_object_identity(self):
+        message = AIMessage(
+            content="x",
+            usage_metadata={"input_tokens": 50, "output_tokens": 5, "total_tokens": 55},
+        )
+
+        usage = turn_usage_from_messages([message, message])
+
+        self.assertEqual(usage.calls, 1)
+        self.assertEqual(usage.input_tokens, 50)
+
+    def test_streamed_messages_survive_summarization_dropping_them_from_the_state(self):
+        # Mid-turn summarization collapses the final state to the last few
+        # messages; the live stream saw every call, so callers concatenate
+        # both and this must count each call exactly once.
+        streamed = [ai("a", 1000, 100), ai("b", 2000, 200), ai("c", 3000, 300)]
+        final_state = [HumanMessage("summary of earlier work"), streamed[-1]]
+
+        usage = turn_usage_from_messages([*streamed, *final_state])
+
+        self.assertEqual(usage.input_tokens, 6000)
+        self.assertEqual(usage.output_tokens, 600)
+        self.assertEqual(usage.calls, 3)
+        self.assertEqual(usage.context_tokens, 3300)
+
+    def test_cache_reads_are_summed_from_input_token_details(self):
+        first = ai("a", 10_000, 500)
+        first.usage_metadata["input_token_details"] = {"cache_read": 9_000}
+        second = ai("b", 12_000, 400)
+        second.usage_metadata["input_token_details"] = {"cache_read": 11_000}
+
+        usage = turn_usage_from_messages([first, second, ai("plain", 100, 10)])
+
+        self.assertEqual(usage.cached_input_tokens, 20_000)
+        self.assertEqual(usage.input_tokens, 22_100)
+
 
 class SessionUsageTests(unittest.TestCase):
     def test_accumulates_tokens_and_priced_costs(self):
@@ -130,6 +174,16 @@ class SessionUsageTests(unittest.TestCase):
         self.assertEqual(session.turns, 0)
         self.assertEqual(session.unpriced_turns, 0)
         self.assertEqual(session.duration, 0.0)
+
+    def test_accumulates_cache_reads_and_savings(self):
+        session = SessionUsage()
+
+        session.add(TurnUsage(100, 10, 110, calls=1, cached_input_tokens=80), 0.002, saved=0.001)
+        session.add(TurnUsage(200, 20, 220, calls=1, cached_input_tokens=150), 0.003, saved=0.002)
+        session.add(TurnUsage(50, 5, 55, calls=1), 0.001)
+
+        self.assertEqual(session.cached_tokens, 230)
+        self.assertAlmostEqual(session.saved, 0.003)
 
     def test_accumulates_processing_time(self):
         session = SessionUsage()

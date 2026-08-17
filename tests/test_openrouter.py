@@ -8,7 +8,12 @@ PAYLOAD = {
             "id": "google/gemini-3.7-flash",
             "name": "Google: Gemini 3.7 Flash",
             "context_length": 1048576,
-            "pricing": {"prompt": "0.000000075", "completion": "0.0000003"},
+            "pricing": {
+                "prompt": "0.000000075",
+                "completion": "0.0000003",
+                "input_cache_read": "0.0000000075",
+                "input_cache_write": "0.00000009375",
+            },
             "supported_parameters": ["tools", "reasoning", "temperature"],
             "default_parameters": {"temperature": 1.0},
         },
@@ -92,6 +97,52 @@ class ModelInfoCostTests(unittest.TestCase):
         info = parse_models(PAYLOAD)["openai/gpt-5.1-codex-mini"]
 
         self.assertIsNone(info.cost_of(1000, 100))
+
+    def test_cache_prices_come_through(self):
+        info = parse_models(PAYLOAD)["google/gemini-3.7-flash"]
+
+        self.assertAlmostEqual(info.cache_read_price, 7.5e-9)
+        self.assertAlmostEqual(info.cache_write_price, 9.375e-8)
+
+    def test_cached_tokens_are_billed_at_the_cache_read_price(self):
+        info = parse_models(PAYLOAD)["google/gemini-3.7-flash"]
+
+        cost = info.cost_of(10_000, 100, cached_tokens=8_000)
+
+        self.assertAlmostEqual(cost, 2_000 * 7.5e-8 + 8_000 * 7.5e-9 + 100 * 3e-7)
+
+    def test_cached_tokens_fall_back_to_full_price_without_a_cache_price(self):
+        info = ModelInfo("m", "M", 1000, 1e-6, 5e-6)
+
+        self.assertAlmostEqual(info.cost_of(1_000, 0, cached_tokens=400), 1_000 * 1e-6)
+
+    def test_cached_tokens_are_clamped_to_the_input_count(self):
+        info = parse_models(PAYLOAD)["google/gemini-3.7-flash"]
+
+        self.assertAlmostEqual(info.cost_of(1_000, 0, cached_tokens=5_000), 1_000 * 7.5e-9)
+
+    def test_assume_cache_writes_bills_fresh_input_at_the_write_price(self):
+        # Real generation from 2026-08-17 (req-1786954784…): 11,956 fresh
+        # input + 1,073 output, caching requested, zero reads — OpenRouter
+        # billed exactly $0.0203 (subtotal $0.0173 + cache write $0.00299).
+        info = ModelInfo("anthropic/claude-haiku-4.5", "Haiku", 200_000, 1e-6, 5e-6, cache_write_price=1.25e-6)
+
+        cost = info.cost_of(11_956, 1_073, cached_tokens=0, assume_cache_writes=True)
+
+        self.assertAlmostEqual(cost, 11_956 * 1.25e-6 + 1_073 * 5e-6)
+        self.assertAlmostEqual(cost, 0.0203, places=4)
+
+    def test_assume_cache_writes_leaves_cached_tokens_at_the_read_price(self):
+        info = parse_models(PAYLOAD)["google/gemini-3.7-flash"]
+
+        cost = info.cost_of(10_000, 100, cached_tokens=8_000, assume_cache_writes=True)
+
+        self.assertAlmostEqual(cost, 2_000 * 9.375e-8 + 8_000 * 7.5e-9 + 100 * 3e-7)
+
+    def test_assume_cache_writes_falls_back_to_full_price_without_a_write_price(self):
+        info = ModelInfo("m", "M", 1000, 1e-6, 5e-6)
+
+        self.assertAlmostEqual(info.cost_of(1_000, 0, assume_cache_writes=True), 1_000 * 1e-6)
 
 
 class OpenRouterCatalogTests(unittest.IsolatedAsyncioTestCase):

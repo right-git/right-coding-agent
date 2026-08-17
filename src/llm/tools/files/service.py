@@ -21,13 +21,24 @@ def _skipped(path: Path) -> bool:
     return any(part in SKIP_DIRS for part in path.parts)
 
 
+def _resolve(file_path: str) -> Path:
+    """User paths with `~` expanded.
+
+    Without this, `Path("~/x").write_text(...)` silently creates a literal
+    `./~` directory and reports success — the model then "verifies" with the
+    shell (which does expand `~`), finds nothing, and rebuilds the same files
+    over and over. That exact loop tripled one benchmarked turn's cost.
+    """
+    return Path(file_path).expanduser()
+
+
 class FileService:
     """Reads, writes, edits, and searches files for the agent."""
 
     def read(self, file_path: str, limit: int | None = None, offset: int = 0) -> str:
         if offset < 0:
             raise ValueError("offset must not be negative")
-        lines = Path(file_path).read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = _resolve(file_path).read_text(encoding="utf-8", errors="replace").splitlines()
         window = limit if limit is not None else MAX_READ_LINES
         segment = lines[offset : offset + window]
         if not segment:
@@ -40,13 +51,15 @@ class FileService:
         return "\n".join(numbered)
 
     def write(self, file_path: str, content: str) -> str:
-        path = Path(file_path)
+        path = _resolve(file_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
-        return f"Wrote {len(content.splitlines())} line(s) ({len(content)} chars) to {path}"
+        # Echo the resolved absolute path so a path that went somewhere
+        # unexpected is visible in the very result that claims success.
+        return f"Wrote {len(content.splitlines())} line(s) ({len(content)} chars) to {path.resolve()}"
 
     def edit(self, file_path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
-        path = Path(file_path)
+        path = _resolve(file_path)
         text = path.read_text(encoding="utf-8")
         occurrences = text.count(old_string)
         if occurrences == 0:
@@ -57,10 +70,10 @@ class FileService:
                 "or pass replace_all=True"
             )
         path.write_text(text.replace(old_string, new_string, -1 if replace_all else 1), encoding="utf-8")
-        return f"Replaced {occurrences if replace_all else 1} occurrence(s) in {path}"
+        return f"Replaced {occurrences if replace_all else 1} occurrence(s) in {path.resolve()}"
 
     def glob(self, pattern: str, path: str = ".", max_results: int = MAX_GLOB_RESULTS) -> str:
-        base = Path(path)
+        base = _resolve(path)
         matches = sorted(match.as_posix() for match in base.glob(pattern) if not _skipped(match))
         if not matches:
             return f"No files match {pattern!r} under {base.resolve().as_posix()}"
@@ -84,7 +97,7 @@ class FileService:
 
         content_lines: list[str] = []
         matched_files: list[tuple[str, int]] = []
-        for candidate in self._candidates(Path(path), glob):
+        for candidate in self._candidates(_resolve(path), glob):
             try:
                 data = candidate.read_text(encoding="utf-8", errors="replace")
             except OSError:

@@ -522,8 +522,11 @@ class ChatUI:
         cost: float | None,
         session: SessionUsage,
         duration: float | None = None,
+        saved: float | None = None,
     ) -> None:
-        """One dim footer line: context fill, turn tokens and cost, session totals."""
+        """One dim footer line: context fill, turn tokens and cost, cache
+        savings (`saved` = dollars the prompt-cache reads knocked off the
+        full input price), session totals."""
         if turn.calls == 0:
             self.console.print("  usage: provider reported no token counts", style="info")
             return
@@ -541,6 +544,17 @@ class ChatUI:
 
         parts = [context_part, turn_part]
 
+        if turn.cached_input_tokens or (saved is not None and saved < 0):
+            share = 100 * turn.cached_input_tokens / turn.input_tokens if turn.input_tokens else 0.0
+            cache_part = f"cache {turn.cached_input_tokens:,} read ({share:.0f}% of input)"
+            if saved and saved > 0:
+                cache_part += f", saved {format_money(saved)}"
+            elif saved and saved < 0:
+                # The turn wrote to the cache but read nothing back — the
+                # write premium made caching a net cost this time.
+                cache_part += f", writes cost {format_money(-saved)} extra"
+            parts.append(cache_part)
+
         if duration is not None and duration > 0:
             parts.append(f"took {format_duration(duration)}")
 
@@ -555,6 +569,10 @@ class ChatUI:
         details = f"{approx}{format_money(session.cost)}"
         if session.duration > 0:
             details += f", {format_duration(session.duration)}"
+        if session.saved > 0:
+            details += f", saved {format_money(session.saved)}"
+        elif session.saved < 0:
+            details += f", cache overhead {format_money(-session.saved)}"
         session_part += f" ({details})"
         parts.append(session_part)
 

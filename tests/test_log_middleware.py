@@ -58,6 +58,21 @@ class SerializeMessageTests(unittest.TestCase):
         self.assertEqual(entry["name"], "run_tools")
         self.assertEqual(entry["status"], "success")
 
+    def test_usage_carries_cache_reads_when_present(self):
+        message = AIMessage(
+            content="ok",
+            usage_metadata={
+                "input_tokens": 100,
+                "output_tokens": 10,
+                "total_tokens": 110,
+                "input_token_details": {"cache_read": 80},
+            },
+        )
+
+        entry = serialize_message(message)
+
+        self.assertEqual(entry["usage"], {"input_tokens": 100, "output_tokens": 10, "cache_read": 80})
+
     def test_ai_message_keeps_tool_calls_and_usage(self):
         entry = serialize_message(
             AIMessage(

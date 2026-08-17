@@ -37,12 +37,37 @@ class ModelInfo:
     completion_price: float | None
     supported_parameters: frozenset[str] = frozenset()
     default_temperature: float | None = None
+    cache_read_price: float | None = None
+    cache_write_price: float | None = None
 
-    def cost_of(self, input_tokens: int, output_tokens: int) -> float | None:
-        """Dollar cost of one call, or None when pricing is unknown."""
+    def cost_of(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        cached_tokens: int = 0,
+        assume_cache_writes: bool = False,
+    ) -> float | None:
+        """Dollar cost of one call, or None when pricing is unknown.
+
+        `cached_tokens` — the subset of `input_tokens` the provider read from
+        its prompt cache — is billed at the catalog's cache-read price when
+        one is published (0.1x for Claude), at full price otherwise.
+
+        `assume_cache_writes` says caching was *requested*: with an advancing
+        breakpoint every uncached input token is also written to the cache,
+        so fresh input bills at the cache-write price (1.25x). OpenAI-shaped
+        usage does not report write counts, so this is the estimate that
+        matched OpenRouter's billed totals within ~1% — verified against a
+        real generation: 11,956 fresh in + 1,073 out priced $0.0203 exactly.
+        """
         if self.prompt_price is None or self.completion_price is None:
             return None
-        return input_tokens * self.prompt_price + output_tokens * self.completion_price
+        cached = min(max(cached_tokens, 0), input_tokens)
+        read_price = self.cache_read_price if self.cache_read_price is not None else self.prompt_price
+        fresh_price = self.prompt_price
+        if assume_cache_writes and self.cache_write_price is not None:
+            fresh_price = self.cache_write_price
+        return (input_tokens - cached) * fresh_price + cached * read_price + output_tokens * self.completion_price
 
     def _lacks(self, parameter: str) -> bool:
         return bool(self.supported_parameters) and parameter not in self.supported_parameters
@@ -124,6 +149,8 @@ def parse_models(payload: Any) -> dict[str, ModelInfo]:
             completion_price=_parse_price(pricing.get("completion")),
             supported_parameters=parameters,
             default_temperature=_parse_default_temperature(entry),
+            cache_read_price=_parse_price(pricing.get("input_cache_read")),
+            cache_write_price=_parse_price(pricing.get("input_cache_write")),
         )
     return models
 

@@ -133,6 +133,50 @@ class UsageFooterTests(unittest.TestCase):
         self.assertIn("tools 2 (+5 in scripts)", rendered)
         self.assertIn("session 14,204 tokens ($0.0012, 12s)", rendered)
 
+    def test_footer_shows_cache_reads_and_savings(self):
+        ui = make_ui()
+        session = SessionUsage()
+        turn = TurnUsage(
+            input_tokens=200_000,
+            output_tokens=9_000,
+            context_tokens=40_000,
+            calls=28,
+            cached_input_tokens=180_000,
+        )
+        session.add(turn, 0.07, 210.0, saved=0.162)
+
+        ui.print_usage(turn, GEMINI, 0.07, session, 210.0, saved=0.162)
+
+        # The recording console wraps the long footer line; collapse the
+        # whitespace so assertions see it as the single line it renders as.
+        rendered = " ".join(ui.console.export_text().split())
+        self.assertIn("cache 180,000 read (90% of input), saved $0.16", rendered)
+        self.assertIn(", saved $0.16)", rendered)  # session totals carry it too
+
+    def test_footer_shows_the_write_premium_when_caching_cost_more_than_it_saved(self):
+        # A turn that wrote to the cache but read nothing back (routing
+        # landed on a cold endpoint): net savings are negative.
+        ui = make_ui()
+        session = SessionUsage()
+        turn = TurnUsage(input_tokens=11_956, output_tokens=1_073, context_tokens=13_029, calls=1)
+        session.add(turn, 0.0203, 12.0, saved=-0.003)
+
+        ui.print_usage(turn, GEMINI, 0.0203, session, 12.0, saved=-0.003)
+
+        rendered = " ".join(ui.console.export_text().split())
+        self.assertIn("cache 0 read (0% of input), writes cost $0.0030 extra", rendered)
+        self.assertIn("cache overhead $0.0030", rendered)
+
+    def test_footer_omits_the_cache_segment_without_cache_reads(self):
+        ui = make_ui()
+        session = SessionUsage()
+        turn = TurnUsage(input_tokens=100, output_tokens=10, context_tokens=110, calls=1)
+        session.add(turn, 0.001)
+
+        ui.print_usage(turn, GEMINI, 0.001, session)
+
+        self.assertNotIn("cache", ui.console.export_text())
+
     def test_footer_omits_time_when_duration_is_unknown(self):
         ui = make_ui()
         session = SessionUsage()

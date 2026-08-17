@@ -131,6 +131,13 @@ class Interpreter:
     def _validate(self, tree: ast.AST) -> None:
         for node in ast.walk(tree):
             if type(node) not in ALLOWED_NODES:
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    # The model's most common reflex; the error is the only
+                    # documentation it reads at that moment, so teach the
+                    # way out instead of just refusing.
+                    raise SandboxError(
+                        "imports are not allowed in run_tools scripts — call bash(...) for shell/OS work instead"
+                    )
                 raise SandboxError(f"'{type(node).__name__}' is not allowed")
             if isinstance(node, ast.Attribute):
                 if node.attr.startswith("_"):
