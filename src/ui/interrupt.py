@@ -56,17 +56,62 @@ def _windows_reader():
     return read
 
 
+class _UnixKeyReader:
+    """cbreak-mode stdin reader for the turn window; restores the terminal.
+
+    `start()` (called from the watcher's __enter__) flips the tty to cbreak —
+    keys arrive without Enter, Ctrl+C still raises SIGINT (ISIG stays on) —
+    and `close()` restores the saved state, so the next prompt_toolkit prompt
+    finds the terminal exactly as it was.
+    """
+
+    def __init__(self, fd: int | None = None):
+        self._fd = sys.stdin.fileno() if fd is None else fd
+        self._saved = None
+
+    def start(self) -> None:
+        import termios
+        import tty
+
+        self._saved = termios.tcgetattr(self._fd)
+        tty.setcbreak(self._fd)
+
+    def __call__(self) -> str:
+        import os
+        import select
+
+        chunks: list[str] = []
+        while True:
+            ready, _, _ = select.select([self._fd], [], [], 0)
+            if not ready:
+                break
+            data = os.read(self._fd, 64)
+            if not data:
+                break
+            chunks.append(data.decode(errors="ignore"))
+        return "".join(chunks)
+
+    def close(self) -> None:
+        if self._saved is None:
+            return
+        import termios
+
+        termios.tcsetattr(self._fd, termios.TCSADRAIN, self._saved)
+        self._saved = None
+
+
 def default_reader():
-    """A no-argument callable draining pending console keys, or None."""
-    if sys.platform != "win32":
-        return None
+    """A key reader for this console (callable, optional start/close), or None."""
     try:
         if sys.stdin is None or not sys.stdin.isatty():
             return None
-        import msvcrt  # noqa: F401
+        if sys.platform == "win32":
+            import msvcrt  # noqa: F401
+
+            return _windows_reader()
+        return _UnixKeyReader()
     except Exception:
         return None
-    return _windows_reader()
 
 
 class EscapeWatcher:
@@ -91,14 +136,26 @@ class EscapeWatcher:
         return "".join(self._typed)
 
     def handle(self, chars: str) -> None:
-        for char in chars:
+        index = 0
+        while index < len(chars):
+            char = chars[index]
             if char == "\x1b":
+                following = chars[index + 1] if index + 1 < len(chars) else ""
+                if following in ("[", "O"):
+                    # An arrow/function key arrives as "\x1b[A"-style CSI/SS3 —
+                    # skip the whole sequence, it is not a cancel request.
+                    index += 2
+                    while index < len(chars) and not chars[index].isalpha() and chars[index] != "~":
+                        index += 1
+                    index += 1
+                    continue
                 self.pressed.set()
-            elif char == "\x08":  # backspace edits the type-ahead stash
+            elif char in ("\x08", "\x7f"):  # backspace/DEL edits the type-ahead stash
                 if self._typed:
                     self._typed.pop()
             elif char >= " ":
                 self._typed.append(char)
+            index += 1
 
     def _run(self) -> None:
         while not self._stop.wait(self.POLL_SECONDS):
@@ -108,6 +165,12 @@ class EscapeWatcher:
                 return  # a broken console must not loop hot; cancel just stops working
 
     def __enter__(self) -> "EscapeWatcher":
+        start = getattr(self._read_keys, "start", None)
+        if start is not None:
+            try:
+                start()
+            except Exception:
+                return self  # no cbreak — Esc simply stays inert this turn
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         return self
@@ -116,3 +179,9 @@ class EscapeWatcher:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=1.0)
+        close = getattr(self._read_keys, "close", None)
+        if close is not None:
+            try:
+                close()
+            except Exception:
+                pass  # restoring a gone terminal must not break the turn

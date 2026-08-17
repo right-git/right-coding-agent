@@ -51,6 +51,7 @@ class SigintHandlerTests(unittest.TestCase):
         handler, ui, current_turn, force_exit = self.make_handler()
         task = Mock()
         task.done.return_value = False
+        task.cancelling.return_value = 0
         current_turn["task"] = task
 
         handler()
@@ -59,9 +60,23 @@ class SigintHandlerTests(unittest.TestCase):
         force_exit.assert_not_called()
         ui.print_warning.assert_called_once()
 
-    def test_second_press_within_the_window_hard_exits(self):
+    def test_any_later_press_on_a_stuck_turn_forces_quit(self):
+        # No 2-second window here: if the turn ignored the first Ctrl+C (a
+        # tool call stuck in an executor thread cannot be cancelled), the next
+        # press must force-quit no matter how much later it comes.
         handler, ui, current_turn, force_exit = self.make_handler()
-        current_turn["task"] = Mock(done=Mock(return_value=False))
+        task = Mock()
+        task.done.return_value = False
+        task.cancelling.return_value = 1  # cancel already requested, still running
+        current_turn["task"] = task
+
+        handler()
+
+        force_exit.assert_called_once_with(130)
+
+    def test_second_press_within_the_window_hard_exits(self):
+        # No turn running (e.g. stuck outside a turn): the timing window applies.
+        handler, ui, current_turn, force_exit = self.make_handler()
 
         handler()
         handler()
@@ -78,6 +93,72 @@ class SigintHandlerTests(unittest.TestCase):
 
 
 class EscapeWatcherTests(unittest.TestCase):
+    def test_arrow_key_sequences_do_not_look_like_escape(self):
+        # In a Unix terminal an arrow key arrives as "\x1b[A" — that must not
+        # cancel the turn; only a lone Esc does.
+        watcher = EscapeWatcher(read_keys=lambda: "")
+
+        watcher.handle("\x1b[A")
+        watcher.handle("\x1bOP")  # SS3 function-key form
+        self.assertFalse(watcher.pressed.is_set())
+
+        watcher.handle("\x1b")
+        self.assertTrue(watcher.pressed.is_set())
+
+    def test_unix_backspace_del_edits_the_stash(self):
+        watcher = EscapeWatcher(read_keys=lambda: "")
+
+        watcher.handle("ab\x7f")
+
+        self.assertEqual(watcher.typed_text, "a")
+
+    @unittest.skipIf(sys.platform == "win32", "termios — не Windows")
+    def test_unix_reader_drains_keys_and_restores_the_terminal(self):
+        import os
+        import pty
+        import termios
+
+        from src.ui.interrupt import _UnixKeyReader
+
+        master, slave = pty.openpty()
+        try:
+            before = termios.tcgetattr(slave)
+            reader = _UnixKeyReader(fd=slave)
+            reader.start()  # enters cbreak
+            os.write(master, "аб\x1b".encode())
+            deadline_chars = ""
+            for _ in range(50):
+                deadline_chars += reader()
+                if "\x1b" in deadline_chars:
+                    break
+            reader.close()
+
+            self.assertIn("аб", deadline_chars)
+            self.assertIn("\x1b", deadline_chars)
+            # canonical mode and echo are back (macOS ptys tweak unrelated bits)
+            restored = termios.tcgetattr(slave)
+            essentials = termios.ICANON | termios.ECHO
+            self.assertEqual(restored[3] & essentials, before[3] & essentials)
+        finally:
+            os.close(master)
+            os.close(slave)
+
+    @unittest.skipIf(sys.platform == "win32", "unix reader — не Windows")
+    def test_create_returns_a_watcher_on_a_unix_tty(self):
+        # Esc-cancel used to be Windows-only; on macOS/Linux create() must
+        # produce a watcher whenever stdin is a real terminal.
+        from unittest.mock import patch
+
+        from src.ui import interrupt as interrupt_module
+
+        fake_stdin = Mock()
+        fake_stdin.isatty.return_value = True
+        fake_stdin.fileno.return_value = 0
+        with patch.object(interrupt_module.sys, "stdin", fake_stdin):
+            watcher = EscapeWatcher.create()
+
+        self.assertIsNotNone(watcher)
+
     def test_escape_sets_the_event_and_typing_is_stashed(self):
         watcher = EscapeWatcher(read_keys=lambda: "")
 
@@ -136,6 +217,28 @@ class RunCancellableTests(unittest.IsolatedAsyncioTestCase):
             return 42
 
         self.assertEqual(await ui.run_cancellable(quick(), watcher=FakeWatcher(pressed=False)), 42)
+
+    async def test_a_stuck_cancellation_tells_the_user_why_it_waits(self):
+        # A tool call inside asyncio.to_thread cannot be aborted — Esc must
+        # explain that the cancel is waiting instead of looking dead.
+        ui = ChatUI(model="m")
+        ui.CANCEL_GRACE_SECONDS = 0.02
+        ui.print_warning = Mock()
+
+        async def stubborn():
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                await asyncio.sleep(0.1)  # "the executor call is still running"
+                raise
+
+        with self.assertRaises(TurnCancelled):
+            await ui.run_cancellable(stubborn(), watcher=FakeWatcher(pressed=True))
+
+        self.assertTrue(
+            any("Ctrl+C" in str(call) for call in ui.print_warning.call_args_list),
+            "the stuck-cancel notice was not shown",
+        )
 
 
 class CancelledTurnTests(unittest.IsolatedAsyncioTestCase):

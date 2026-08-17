@@ -261,12 +261,17 @@ class ChatUI:
             self.console.print()
             return "/quit"
 
+    CANCEL_GRACE_SECONDS = 1.5
+
     async def run_cancellable(self, coroutine, watcher=None):
         """Await a turn while watching the console for Esc; Esc cancels it.
 
         Raises `TurnCancelled` on Esc. Keys the watcher consumed come back as
-        type-ahead in the next prompt. Without a console watcher (non-Windows,
-        redirected stdin) the turn simply runs to completion.
+        type-ahead in the next prompt. Without a console watcher (redirected
+        stdin) the turn simply runs to completion. A cancel can only take
+        effect when the turn's current tool call returns — a call stuck in an
+        executor thread cannot be aborted — so if it takes longer than the
+        grace period, the wait is explained instead of looking dead.
         """
         from src.ui.interrupt import EscapeWatcher, TurnCancelled
 
@@ -285,6 +290,9 @@ class ChatUI:
         finally:
             self._type_ahead += watcher.typed_text
         task.cancel()
+        done, _ = await asyncio.wait({task}, timeout=self.CANCEL_GRACE_SECONDS)
+        if not done:
+            self.print_warning("cancelling — waiting for the running tool call to finish (Ctrl+C twice force-quits)")
         try:
             await task
         except asyncio.CancelledError:

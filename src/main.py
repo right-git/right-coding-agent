@@ -108,14 +108,21 @@ def make_sigint_handler(policy: InterruptPolicy, ui, current_turn: dict, *, forc
     """
 
     def on_sigint() -> None:
+        task = current_turn.get("task")
+        if task is not None and not task.done():
+            if getattr(task, "cancelling", lambda: 0)():
+                # The first Ctrl+C was ignored (a tool call stuck in an
+                # executor thread) — no time window here, the next press
+                # must always get the user out.
+                logger.warning("Force quit: the turn ignored the first Ctrl+C")
+                force_exit(130)
+                return
+            ui.print_warning("interrupting the turn — press Ctrl+C again to force quit")
+            task.cancel()
+            return
         if policy.press(now=clock()) == "force":
             logger.warning("Force quit on double Ctrl+C")
             force_exit(130)
-            return
-        task = current_turn.get("task")
-        if task is not None and not task.done():
-            ui.print_warning("interrupting the turn — press Ctrl+C again to force quit")
-            task.cancel()
         else:
             ui.print_warning("press Ctrl+C again to force quit")
 
