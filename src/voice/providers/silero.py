@@ -75,7 +75,7 @@ class SileroSpeaker:
         if language == "en":
             # v3_en rejects the Russian-only options and has its own voices.
             options = {"speaker": self.english_speaker}
-        audio = self.load(language).apply_tts(text=text, sample_rate=self.sample_rate, **options)
+        audio = self.load(language).apply_tts(ssml_text=text, sample_rate=self.sample_rate, **options)
         return audio.cpu().numpy(), self.sample_rate
 
     def _default_loader(self, language: str):

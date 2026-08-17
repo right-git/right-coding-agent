@@ -65,14 +65,7 @@ class ToolContractTests(unittest.IsolatedAsyncioTestCase):
             for tool in agent.ask_agent.await_args.kwargs["tools"]
         ]
 
-        self.assertEqual(
-            tool_names,
-            [
-                "search_tools",
-                "get_tool",
-                "run_tools",
-            ],
-        )
+        self.assertEqual(tool_names, ["run_tools"])
 
     async def test_right_coding_agent_uses_required_middlewares(self):
         agent = Agents(

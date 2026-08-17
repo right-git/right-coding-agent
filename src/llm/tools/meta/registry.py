@@ -16,10 +16,15 @@ from ...statistics.script_calls import count_script_call
 SEARCH_LIMIT = 8
 
 # Names the interpreter resolves before the tool table (its builtins and the
-# `parallel` special form). A tool registered under one of these would be
-# silently unreachable from scripts, so registration rejects them outright.
+# `parallel` special form), plus the meta names run_tools injects into every
+# script's tool table (search_tools/get_tool) and run_tools itself. A tool
+# registered under one of these would be silently unreachable from scripts,
+# so registration rejects them outright.
 RESERVED_SCRIPT_NAMES = frozenset(
     {
+        "search_tools",
+        "get_tool",
+        "run_tools",
         "parallel",
         "run_functions_in_parallel",
         "sleep",

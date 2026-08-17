@@ -1,3 +1,4 @@
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -62,28 +63,12 @@ class CompactFinishedTurnTests(unittest.TestCase):
         self.assertIn("2×run_tools", recap_result.content)
         self.assertIn("page text", recap_result.content)
 
-    def test_search_results_survive_only_as_counters(self):
-        messages = [
-            HumanMessage("go"),
-            tool_call_ai("search_tools", {"query": "screen"}, "c1"),
-            ToolMessage(content="screen_click(...) — clicks", tool_call_id="c1", name="search_tools"),
-            *run_tools_round("screen_click('button')", "clicked", "c2"),
-            AIMessage("done"),
-        ]
-
-        compacted = compact_finished_turn(messages)
-
-        recap_result = compacted[2]
-        self.assertIn("1×search_tools", recap_result.content)
-        self.assertIn("1×run_tools", recap_result.content)
-        self.assertNotIn("screen_click(...) — clicks", recap_result.content)
-
-    def test_get_tool_contracts_are_kept_for_reuse(self):
+    def test_in_script_contracts_are_kept_for_reuse(self):
         contract = "web_search(url)\n\nFetch a web page and return Markdown.\n\nArgument schema: {...}"
+        discovery_result = json.dumps({"result": "ok", "logs": [], "error": None, "contracts": [contract]})
         messages = [
             HumanMessage("go"),
-            tool_call_ai("get_tool", {"names": ["web_search"]}, "c1"),
-            ToolMessage(content=contract, tool_call_id="c1", name="get_tool"),
+            *run_tools_round("get_tool(['web_search'])", discovery_result, "c1"),
             *run_tools_round("web_search('https://x')", "ok", "c2"),
             AIMessage("done"),
         ]
@@ -93,15 +78,16 @@ class CompactFinishedTurnTests(unittest.TestCase):
         recap_result = compacted[2]
         self.assertIn("tool contracts", recap_result.content)
         self.assertIn("Fetch a web page and return Markdown.", recap_result.content)
+        # kept once, in the contracts section — not again in the result heads
+        self.assertEqual(recap_result.content.count("Fetch a web page and return Markdown."), 1)
 
-    def test_identical_contracts_are_kept_once(self):
+    def test_identical_contracts_from_two_runs_are_kept_once(self):
         contract = "screen_click(description)\n\nClick an element."
+        discovery_result = json.dumps({"result": "ok", "logs": [], "error": None, "contracts": [contract]})
         messages = [
             HumanMessage("go"),
-            tool_call_ai("get_tool", {"names": ["screen_click"]}, "c1"),
-            ToolMessage(content=contract, tool_call_id="c1", name="get_tool"),
-            tool_call_ai("get_tool", {"names": ["screen_click"]}, "c2"),
-            ToolMessage(content=contract, tool_call_id="c2", name="get_tool"),
+            *run_tools_round("get_tool(['screen_click'])", discovery_result, "c1"),
+            *run_tools_round("get_tool(['screen_click'])", discovery_result, "c2"),
             *run_tools_round("screen_click('x')", "ok", "c3"),
             AIMessage("done"),
         ]
@@ -109,6 +95,18 @@ class CompactFinishedTurnTests(unittest.TestCase):
         compacted = compact_finished_turn(messages)
 
         self.assertEqual(compacted[2].content.count("Click an element."), 1)
+
+    def test_non_json_run_tools_results_pass_through_untouched(self):
+        messages = [
+            HumanMessage("go"),
+            *run_tools_round("boom()", "Tool call failed, error: kaput", "c1"),
+            AIMessage("done"),
+        ]
+
+        compacted = compact_finished_turn(messages)
+
+        self.assertIn("Tool call failed, error: kaput", compacted[2].content)
+        self.assertNotIn("tool contracts", compacted[2].content)
 
     def test_attached_image_messages_are_kept_after_the_recap(self):
         image = HumanMessage(content=[{"type": "text", "text": "img"}], additional_kwargs={ATTACHMENT_MARKER: True})

@@ -1,9 +1,10 @@
 """The agent's tool layer — one subpackage per concern.
 
-- `meta/` — the three meta tools the model sees (`search_tools` /
-  `get_tool` / `run_tools`), the `ToolRegistry` behind them, the default
-  registry, the image-attachment channel, and the `sandbox/` interpreter
-  that executes `run_tools` scripts;
+- `meta/` — the single meta tool the model sees (`run_tools`) with its
+  in-script `search_tools` / `get_tool` discovery functions, the
+  `ToolRegistry` behind them, the default registry, the image-attachment
+  channel, and the `sandbox/` interpreter that executes `run_tools`
+  scripts;
 - `parser/`, `computer/`, `files/`, `shell/` — concrete capabilities, each
   with the fixed shape `tool.py` (the `@tool` functions the LLM receives) +
   `service.py` (the class doing the real work) + optional `utils.py`; new

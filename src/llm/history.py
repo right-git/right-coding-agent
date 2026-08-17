@@ -9,14 +9,15 @@ keep riding along with every future model call.
 `compact_finished_turn` rewrites the just-finished turn's tool tail into
 one synthetic `run_tools` pair — the merged scripts as the call, counts
 plus trimmed result heads as the output — cutting a heavy tool turn from
-thousands of tokens to a few hundred. `search_tools` results are discovery
-noise and survive only as counters, but `get_tool` contracts are carried in
-the recap verbatim (capped): they are durable knowledge, and dropping them
-makes the model re-discover the same tools next turn — two extra model
-round-trips at full context, far dearer than the ~1k tokens the contracts
-cost. This self-regulates: once contracts are visible in history the model
-stops calling `get_tool`, and later recaps add none. Earlier turns are never
-rewritten by compaction, so provider prompt caching keeps its stable prefix.
+thousands of tokens to a few hundred. Tool contracts fetched by in-script
+`get_tool` calls arrive structurally in the run_tools result JSON (its
+`contracts` field) and are carried in the recap verbatim (capped): they are
+durable knowledge, and dropping them makes the model re-discover the same
+tools next turn — two extra model round-trips at full context, far dearer
+than the ~1k tokens the contracts cost. This self-regulates: once contracts
+are visible in history the model stops calling `get_tool`, and later recaps
+add none. Earlier turns are never rewritten by compaction, so provider
+prompt caching keeps its stable prefix.
 
 `prune_images` is the second half: every image in history is re-sent with
 every model call, and a screenshot goes stale the moment its turn ends — so
@@ -29,6 +30,7 @@ image forever. `finalize_turn_history` applies both steps; that is what the
 chat loop calls when a turn ends.
 """
 
+import json
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -42,8 +44,6 @@ RECAP_CONTRACT_CHARS = 6_000
 RESULT_SLICE_CHARS = 300
 SCRIPT_SEPARATOR = "\n# --- next script ---\n"
 CONTRACT_SEPARATOR = "\n\n---\n\n"
-NOISE_TOOLS = frozenset({"search_tools"})
-CONTRACT_TOOL = "get_tool"
 RECAP_MARKER = "tool_recap"
 
 KEEP_TOOL_IMAGES = 1
@@ -56,6 +56,24 @@ def _clip(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + f"… [+{len(text) - limit} chars]"
+
+
+def _extract_contracts(content: str) -> tuple[str, list[str]]:
+    """A run_tools result without its `contracts` field, plus the contracts.
+
+    In-script `get_tool` calls deliver contracts structurally in the result
+    JSON; they are pulled out here so the recap carries them verbatim while
+    the rest of the result is trimmed like any other. Non-JSON content (a
+    clipped result, a tool-level failure string) passes through untouched.
+    """
+    try:
+        payload = json.loads(content)
+    except ValueError:
+        return content, []
+    if not isinstance(payload, dict) or not isinstance(payload.get("contracts"), list):
+        return content, []
+    contracts = [str(item).strip() for item in payload.pop("contracts") if str(item).strip()]
+    return json.dumps(payload, ensure_ascii=False), contracts
 
 
 def _tail_bounds(messages: list) -> tuple[int, int] | None:
@@ -123,14 +141,13 @@ def compact_finished_turn(messages: list) -> list:
                         scripts.append(code.strip())
         elif isinstance(message, ToolMessage):
             name = message.name or call_kinds.get(message.tool_call_id, "")
-            if name == CONTRACT_TOOL:
-                contract = str(message.content).strip()
-                if contract and contract not in contracts:
-                    contracts.append(contract)
-                continue
-            if name in NOISE_TOOLS:
-                continue
-            preview = scrub_text(" ".join(str(message.content).split()), RESULT_SLICE_CHARS)
+            content = str(message.content)
+            if name == "run_tools":
+                content, extracted = _extract_contracts(content)
+                for contract in extracted:
+                    if contract not in contracts:
+                        contracts.append(contract)
+            preview = scrub_text(" ".join(content.split()), RESULT_SLICE_CHARS)
             if preview:
                 result_slices.append(f"- {name or 'tool'}: {preview}")
         elif isinstance(message, HumanMessage):

@@ -21,9 +21,10 @@ class Agents(LLMClient):
         on_message=None,
         on_token=None,
     ):
-        # The agent's whole tool surface is the three meta tools: every other
-        # capability is discovered through search_tools / get_tool and driven
-        # from run_tools scripts (see src/llm/tools/meta/tool.py).
+        # The agent's whole tool surface is the single run_tools meta tool:
+        # every other capability is discovered via the in-script
+        # search_tools()/get_tool() functions and driven from run_tools
+        # scripts (see src/llm/tools/meta/tool.py).
         tools = [
             *META_TOOLS,
         ]

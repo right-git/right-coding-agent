@@ -1,7 +1,8 @@
-"""The meta layer: everything that serves the three meta tools.
+"""The meta layer: everything that serves the single meta tool.
 
-`tool.py` — `search_tools` / `get_tool` / `run_tools`, the only tools the
-model sees; `registry.py` — the `ToolRegistry` they search, document, and
+`tool.py` — `run_tools`, the only tool the model sees, plus the in-script
+`search_tools` / `get_tool` discovery functions it injects into every
+script; `registry.py` — the `ToolRegistry` they search, document, and
 execute; `defaults.py` — the process-wide default registry with the actual
 tool set; `attachments.py` — the channel that carries tool-captured images
 out of a run; `sandbox/` — the interpreter that executes `run_tools` scripts.

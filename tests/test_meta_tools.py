@@ -84,6 +84,19 @@ class ToolRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "collides"):
             ToolRegistry([sleep])
 
+    def test_names_of_in_script_meta_functions_are_rejected(self):
+        @tool(parse_docstring=True)
+        async def get_tool() -> str:
+            """Would shadow the injected in-script discovery function.
+
+            Returns:
+                Nothing useful.
+            """
+            return "no"
+
+        with self.assertRaisesRegex(ValueError, "collides"):
+            ToolRegistry([get_tool])
+
     def test_search_ranks_name_matches_first(self):
         job_status, _ = make_job_status()
         registry = ToolRegistry([job_status, fetch_page])
@@ -154,26 +167,26 @@ class MetaToolTests(unittest.IsolatedAsyncioTestCase):
         set_registry(ToolRegistry([fetch_page, self.job_status, boom]))
 
     async def test_search_tools_reports_matches(self):
-        result = await search_tools.ainvoke({"query": "fetch page"})
+        result = await search_tools("fetch page")
 
         self.assertIn("fetch_page(url, timeout=5)", result)
         self.assertIn("get_tool", result)
 
     async def test_search_tools_falls_back_to_the_catalogue(self):
-        result = await search_tools.ainvoke({"query": "zzz-nothing"})
+        result = await search_tools("zzz-nothing")
 
         self.assertIn("Nothing matched", result)
         self.assertIn("fetch_page", result)
         self.assertIn("job_status", result)
 
     async def test_get_tool_returns_the_contract(self):
-        result = await get_tool.ainvoke({"names": ["fetch_page"]})
+        result = await get_tool(["fetch_page"])
 
         self.assertIn("Argument schema:", result)
         self.assertIn("Address of the page.", result)
 
     async def test_get_tool_returns_several_contracts_in_one_call(self):
-        result = await get_tool.ainvoke({"names": ["fetch_page", "job_status"]})
+        result = await get_tool(["fetch_page", "job_status"])
 
         self.assertIn("fetch_page(url, timeout=5)", result)
         self.assertIn("job_status(job_id)", result)
@@ -181,27 +194,71 @@ class MetaToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(result.index("fetch_page("), result.index("job_status("))
 
     async def test_get_tool_mixes_contracts_and_suggestions(self):
-        result = await get_tool.ainvoke({"names": ["fetch_page", "nope"]})
+        result = await get_tool(["fetch_page", "nope"])
 
         self.assertIn("Argument schema:", result)
         self.assertIn("Unknown tool: 'nope'", result)
 
     async def test_get_tool_accepts_a_loose_string_and_dedupes(self):
-        result = await get_tool.ainvoke({"names": "fetch_page, job_status fetch_page"})
+        result = await get_tool("fetch_page, job_status fetch_page")
 
         self.assertEqual(result.count("fetch_page(url, timeout=5)"), 1)
         self.assertIn("job_status(job_id)", result)
 
     async def test_get_tool_without_names_points_to_search(self):
-        result = await get_tool.ainvoke({"names": []})
+        result = await get_tool([])
 
         self.assertIn("search_tools", result)
 
     async def test_get_tool_suggests_names_for_unknown_tools(self):
-        result = await get_tool.ainvoke({"names": ["fetch"]})
+        result = await get_tool(["fetch"])
 
         self.assertIn("Unknown tool: 'fetch'", result)
         self.assertIn("fetch_page", result)
+
+    async def test_scripts_can_search_and_fetch_contracts_in_one_run(self):
+        outcome = json.loads(
+            await run_tools.ainvoke(
+                {
+                    "code": (
+                        'print(search_tools("fetch page"))\n'
+                        'note = get_tool(["fetch_page", "job_status"])\n'
+                        "return note\n"
+                    )
+                }
+            )
+        )
+
+        self.assertIsNone(outcome["error"])
+        self.assertIn("fetch_page(url, timeout=5)", outcome["logs"][0])
+        self.assertIn("'contracts' field", outcome["result"])
+        self.assertEqual(len(outcome["contracts"]), 2)
+        self.assertIn("Address of the page.", outcome["contracts"][0])
+        self.assertIn("job_status(job_id)", outcome["contracts"][1])
+
+    async def test_in_script_discovery_is_not_counted_as_tool_work(self):
+        outcome = json.loads(
+            await run_tools.ainvoke({"code": ('get_tool(["fetch_page"])\n' 'return fetch_page("a")\n')})
+        )
+
+        self.assertIsNone(outcome["error"])
+        self.assertEqual(outcome["result"], "page:a:5")
+        self.assertEqual(outcome["tool_calls"], 1)
+
+    async def test_in_script_get_tool_reports_unknown_names_inline(self):
+        outcome = json.loads(await run_tools.ainvoke({"code": 'return get_tool(["nope"])'}))
+
+        self.assertIsNone(outcome["error"])
+        self.assertIn("Unknown tool: 'nope'", outcome["result"])
+        self.assertNotIn("contracts", outcome)
+
+    async def test_in_script_contracts_are_deduplicated_per_run(self):
+        outcome = json.loads(
+            await run_tools.ainvoke({"code": ('get_tool(["fetch_page"])\n' 'return get_tool(["fetch_page"])\n')})
+        )
+
+        self.assertIsNone(outcome["error"])
+        self.assertEqual(len(outcome["contracts"]), 1)
 
     async def test_run_tools_executes_parallel_calls_and_logs(self):
         outcome = json.loads(
@@ -340,10 +397,7 @@ class DefaultRegistryTests(unittest.TestCase):
             self.assertIn(kept, names)
 
     def test_meta_tools_have_stable_names(self):
-        self.assertEqual(
-            [tool_obj.name for tool_obj in META_TOOLS],
-            ["search_tools", "get_tool", "run_tools"],
-        )
+        self.assertEqual([tool_obj.name for tool_obj in META_TOOLS], ["run_tools"])
 
 
 if __name__ == "__main__":
