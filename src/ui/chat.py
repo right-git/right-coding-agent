@@ -13,7 +13,7 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from src.ui.clipboard import encode_image, grab_clipboard_image
-from src.ui.commands import CommandHandler
+from src.ui.commands import CommandHandler, McpAction
 from src.ui.completer import CommandCompleter
 from src.ui.sound import play_done_sound
 from src.ui.stream import TurnStream
@@ -305,8 +305,10 @@ class ChatUI:
         if self.voice is not None:
             self.voice.cancel_turn()
 
-    def handle_command(self, text: str) -> str | None:
-        """Dispatch a slash command; returns "clear" when history must reset."""
+    def handle_command(self, text: str) -> str | McpAction | None:
+        """Dispatch a slash command; returns "clear" when history must reset,
+        or an `McpAction` when the main loop must run it against the MCP
+        manager (see `src.ui.commands.run_mcp_action`)."""
         return self.commands.handle(text)
 
     def _format_tool_call(self, tc: dict) -> tuple[str, str]:

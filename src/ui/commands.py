@@ -15,6 +15,7 @@ are allowed — the catalog's absence must not lock the user out.
 
 import re
 import sys
+from dataclasses import dataclass
 
 from src.config.logging import app_logging
 
@@ -23,6 +24,93 @@ CODE_FENCE_RE = re.compile(r"```[^\n]*\n(.*?)(?:```|\Z)", re.DOTALL)
 CLEAR_WORDS = ("none", "off", "default")
 MAX_LISTED_MATCHES = 8
 MAX_SEARCH_RESULTS = 15
+MCP_SUBCOMMANDS = ("reconnect", "login", "logout")
+# Literal style specs, not the app theme's "info"/"success"/"error" aliases:
+# `run_mcp_action` is called with a plain console in tests (and could be
+# handed any console), and a literal spec renders identically wherever the
+# theme happens to define those names the same way ("error" -> "bold red").
+MCP_INFO = "dim"
+MCP_SUCCESS = "bold green"
+MCP_ERROR = "bold red"
+
+
+@dataclass(frozen=True)
+class McpAction:
+    """An `/mcp`-family outcome the main loop must act on outside the UI.
+
+    `kind` is "reconnect" | "login" | "logout" | "prompt"; `argument` is the
+    server name for the first three, or the full `/mcp__srv__prompt arg...`
+    text for "prompt". `CommandHandler.handle` returns this instead of acting
+    directly because reconnecting and fetching a prompt are async and touch
+    the MCP manager, which the synchronous command handler does not own.
+    """
+
+    kind: str
+    argument: str
+
+
+def _map_prompt_arguments(words: list[str], arguments: list) -> dict[str, str]:
+    """Whitespace-split words onto prompt arguments, positionally.
+
+    Extra words beyond the argument count join into the last argument; with
+    no declared arguments (or no words), the mapping is empty.
+    """
+    names = [argument.name for argument in arguments]
+    mapping: dict[str, str] = {}
+    for index, name in enumerate(names):
+        if index >= len(words):
+            break
+        if index == len(names) - 1:
+            mapping[name] = " ".join(words[index:])
+        else:
+            mapping[name] = words[index]
+    return mapping
+
+
+async def run_mcp_action(action: McpAction, manager, console) -> str | None:
+    """Execute one `McpAction`; returns text to send as a user turn, or None.
+
+    `reconnect`/`login`/`logout` never return text — they print their result
+    and the main loop just continues. `prompt` fetches the rendered prompt
+    text and returns it so the caller can feed it into a turn. Every failure
+    is caught and printed rather than raised — a bad MCP server must not take
+    down the REPL. `prompt_commands`/`find_prompt` can name prompts of a
+    currently-disconnected server, so the prompt branch handles the resulting
+    `ConnectionError` with a clear reconnect hint instead of a raw traceback.
+    """
+    try:
+        if action.kind == "reconnect":
+            status = await manager.reconnect(action.argument)
+            style = MCP_SUCCESS if status.state.value == "connected" else MCP_ERROR
+            console.print(f"  {action.argument}: {status.state.value}", style=style)
+            return None
+
+        if action.kind in ("login", "logout"):
+            console.print(f"  MCP {action.kind} arrives in a later task", style=MCP_INFO)
+            return None
+
+        if action.kind == "prompt":
+            command, _, rest = action.argument.partition(" ")
+            found = manager.find_prompt(command)
+            if found is None:
+                console.print(f"  unknown MCP prompt command: {command}", style=MCP_ERROR)
+                return None
+            server, prompt = found
+            arguments = _map_prompt_arguments(rest.split(), prompt.arguments)
+            try:
+                return await manager.get_prompt(server, prompt.name, arguments)
+            except ConnectionError:
+                console.print(
+                    f"  server '{server}' is not connected — /mcp reconnect {server}",
+                    style=MCP_ERROR,
+                )
+                return None
+
+        console.print(f"  unknown MCP action: {action.kind}", style=MCP_ERROR)
+        return None
+    except Exception as error:
+        console.print(f"  {error}", style=MCP_ERROR)
+        return None
 
 
 class CommandHandler:
@@ -33,7 +121,7 @@ class CommandHandler:
     def console(self):
         return self.ui.console
 
-    def handle(self, text: str) -> str | None:
+    def handle(self, text: str) -> str | McpAction | None:
         stripped = text.strip()
         command, _, argument = stripped.partition(" ")
         command = command.lower()
@@ -69,6 +157,12 @@ class CommandHandler:
             self.console.clear()
             self.ui.print_welcome()
             return "clear"
+        if command == "/mcp":
+            return self._mcp(argument)
+        if command.startswith("/mcp__"):
+            return self._mcp_prompt(stripped)
+        if command == "/tool":
+            return self._tool_pin(argument)
 
         self.console.print(f"  unknown command: {command} — try /help", style="error")
         return None
@@ -88,6 +182,8 @@ class CommandHandler:
             ("/voice [on|off]", "spoken replies on/off (needs ENABLE_VOICE_MODEL=1)"),
             ("/check", "check macOS permissions and raise the missing consent dialogs"),
             ("/log-level [name]", "show or change the log level"),
+            ("/mcp", "MCP servers: status, reconnect <name>, login/logout <name>"),
+            ("/tool <name>", "pin a tool for the next message (its contract goes along)"),
             ("/clear", "clear screen and history"),
             ("/quit", "exit"),
         ]
@@ -466,4 +562,107 @@ class CommandHandler:
             return None
 
         self.console.print(f"  log level set to {new_level}", style="success")
+        return None
+
+    # -------------------------------------------------------------------- mcp
+
+    _MCP_STATE_GLYPHS = {
+        "connected": "●",
+        "connecting": "○",
+        "failed": "✗",
+        "needs auth": "✗",
+        "disconnected": "○",
+    }
+    _MCP_STATE_STYLES = {
+        "connected": MCP_SUCCESS,
+        "failed": MCP_ERROR,
+        "needs auth": MCP_ERROR,
+    }
+    _MCP_HINT = (
+        "  /mcp reconnect <name>, /mcp login <name>; " "manage servers with: uv run python -m src.main mcp add ..."
+    )
+
+    def _mcp(self, argument: str) -> McpAction | None:
+        """`/mcp`: status table; `/mcp reconnect|login|logout <name>`: an action."""
+        from src.llm.tools.mcp.manager import get_mcp_manager
+
+        manager = get_mcp_manager()
+        parts = argument.split(None, 1)
+        if not parts:
+            return self._render_mcp_status(manager)
+
+        sub = parts[0].lower()
+        if sub not in MCP_SUBCOMMANDS:
+            self.console.print(
+                f"  unknown /mcp subcommand: {sub} — try /mcp, /mcp reconnect <name>, /mcp login|logout <name>",
+                style=MCP_ERROR,
+            )
+            return None
+
+        name = parts[1].strip().split()[0] if len(parts) > 1 and parts[1].strip() else ""
+        if not name:
+            self.console.print(f"  usage: /mcp {sub} <name>", style=MCP_ERROR)
+            return None
+
+        known = {status.name for status in manager.statuses()}
+        if name not in known:
+            self.console.print(f"  unknown MCP server: {name}", style=MCP_ERROR)
+            return None
+        return McpAction(sub, name)
+
+    def _render_mcp_status(self, manager) -> None:
+        statuses = manager.statuses()
+        self.console.print()
+        if not statuses:
+            self.console.print("  no MCP servers configured", style=MCP_INFO)
+            self.console.print(
+                "  manage servers with: uv run python -m src.main mcp add ...",
+                style=MCP_INFO,
+            )
+            self.console.print()
+            return None
+
+        for status in statuses:
+            state = status.state.value
+            glyph = self._MCP_STATE_GLYPHS.get(state, "○")
+            style = self._MCP_STATE_STYLES.get(state, MCP_INFO)
+            line = f"  {glyph} {status.name}  {status.transport}/{status.scope}  {status.tool_count} tools  {state}"
+            if status.error:
+                line += f"  — {status.error}"
+            self.console.print(line, style=style, markup=False, highlight=False)
+
+        prompts = manager.prompt_commands()
+        if prompts:
+            self.console.print()
+            for command, description in prompts:
+                self.console.print(f"  {command:<28} {description}", style=MCP_INFO)
+
+        self.console.print()
+        self.console.print(self._MCP_HINT, style=MCP_INFO)
+        self.console.print()
+        return None
+
+    def _mcp_prompt(self, text: str) -> McpAction | None:
+        """`/mcp__server__prompt [args...]`: an MCP prompt command."""
+        from src.llm.tools.mcp.manager import get_mcp_manager
+
+        manager = get_mcp_manager()
+        command = text.split(None, 1)[0]
+        if manager.find_prompt(command) is None:
+            self.console.print(f"  unknown MCP prompt command: {command}", style=MCP_ERROR)
+            prompts = manager.prompt_commands()
+            if prompts:
+                self.console.print("  available:", style=MCP_INFO)
+                for cmd, description in prompts:
+                    self.console.print(f"    {cmd:<28} {description}", style=MCP_INFO)
+            else:
+                self.console.print("  no MCP prompt commands are available", style=MCP_INFO)
+            return None
+        return McpAction("prompt", text)
+
+    # ------------------------------------------------------------- tool pin
+
+    def _tool_pin(self, argument: str) -> None:
+        """`/tool <name>`: stub — Task 13 implements pinning a tool's contract."""
+        self.console.print("  /tool: pinning a tool for the next message is coming in a later task", style=MCP_INFO)
         return None

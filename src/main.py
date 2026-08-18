@@ -17,6 +17,7 @@ from src.llm.utils import (
     trim_incomplete_tool_calls,
 )
 from src.ui import ChatUI
+from src.ui.commands import McpAction, run_mcp_action
 from src.ui.interrupt import InterruptPolicy, TurnCancelled
 
 # The startup model comes from .env (LLM_DEFAULT_MODEL); /model can switch
@@ -27,6 +28,25 @@ EMPTY_RESPONSE_NUDGE = (
     "Your last message was empty. Continue: finish the remaining steps of "
     "the task, or state what you found and what is still missing."
 )
+
+
+def _status_word(state) -> str:
+    """Map an MCP `ServerState` onto `ChatUI.set_model_status`'s vocabulary.
+
+    `set_model_status` only renders three words ("loading" / "ready" /
+    "failed" — see `ChatUI._model_status_text`); anything else is stored but
+    stays invisible in the status line, which is the right outcome for a
+    plain disconnect (stop, or the moment between teardown and reconnect) —
+    it is not a failure and should not flash a red mark. `ServerState` is a
+    `str` subclass, so comparing against literals is exact.
+    """
+    if state == "connecting":
+        return "loading"
+    if state == "connected":
+        return "ready"
+    if state in ("failed", "needs auth"):
+        return "failed"
+    return "disconnected"
 
 
 def preload_vision_model(ui: ChatUI | None = None) -> None:
@@ -397,6 +417,12 @@ async def main():
     # the interpreter in concurrent.futures' atexit join.
     threading.Thread(target=preload_vision_model, args=(ui,), name="vision-preload", daemon=True).start()
 
+    from src.llm.tools.mcp.manager import get_mcp_manager
+
+    mcp_manager = get_mcp_manager()
+    mcp_manager.on_status = lambda name, state: ui.set_model_status(f"mcp:{name}", _status_word(state))
+    mcp_task = asyncio.create_task(mcp_manager.start())
+
     current_turn: dict = {"task": None}
     try:
         asyncio.get_running_loop().add_signal_handler(
@@ -420,7 +446,13 @@ async def main():
                 if result == "clear":
                     messages = []
                 model = ui.model
-                continue
+                if isinstance(result, McpAction):
+                    prompt_text = await run_mcp_action(result, mcp_manager, ui.console)
+                    if prompt_text is None:
+                        continue
+                    user_content = prompt_text  # fall through into the turn below
+                else:
+                    continue
 
             turn = asyncio.create_task(
                 process_user_turn(
@@ -446,6 +478,11 @@ async def main():
                 current_turn["task"] = None
     finally:
         catalog_task.cancel()
+        mcp_task.cancel()
+        try:
+            await mcp_manager.stop()
+        except Exception:
+            logger.exception("MCP manager shutdown failed")
 
 
 def cli_main() -> None:
