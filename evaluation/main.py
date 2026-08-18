@@ -17,6 +17,7 @@ from src.llm.types import LLMProvider
 from src.llm.statistics import SessionUsage
 from src.main import available_models, preload_vision_model, process_user_turn
 from src.ui import ChatUI
+from src.ui.commands import SkillAction
 
 from .direct_agent import DirectAgents
 from .direct_tools import DIRECT_TOOLS, schema_token_estimate
@@ -95,7 +96,10 @@ async def main():
                     session_usage = SessionUsage()
                     print_architecture_banner(ui)
                 model = ui.model
-                continue
+                if isinstance(result, SkillAction):
+                    user_content = result.text  # fall through into the turn below
+                else:
+                    continue
 
             messages = await process_user_turn(
                 agents=agents,

@@ -3,6 +3,7 @@ import os
 import signal
 import threading
 import time
+from pathlib import Path
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from src.config.logging import logger
@@ -427,7 +428,7 @@ async def main():
 
     try:
         skill_store = start_skill_store()
-        notice = skills_startup_report(skill_store, auto_import=settings.skills_auto_import)
+        notice = skills_startup_report(skill_store, auto_import=settings.skills_auto_import, repo_root=Path.cwd())
         if notice:
             ui.console.print(f"  {notice}", style="dim", markup=False, highlight=False)
     except Exception:

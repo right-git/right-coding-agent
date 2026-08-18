@@ -38,6 +38,16 @@ class TestStartupReport(unittest.TestCase):
         empty_home.mkdir()
         self.assertIsNone(skills_startup_report(self.store, auto_import=False, home=empty_home, repo_root=None))
 
+    def test_hint_finds_project_skills_under_repo_root(self):
+        empty_home = Path(self.tmp.name) / "empty_home"
+        empty_home.mkdir()
+        repo_root = Path(self.tmp.name) / "repo"
+        make_skill_dir(repo_root / ".claude" / "skills", "proj", "---\ndescription: p\n---\nbody\n")
+        # Without repo_root, the project-scoped source is never consulted.
+        self.assertIsNone(skills_startup_report(self.store, auto_import=False, home=empty_home, repo_root=None))
+        report = skills_startup_report(self.store, auto_import=False, home=empty_home, repo_root=repo_root)
+        self.assertIn("/skills import", report)
+
 
 if __name__ == "__main__":
     unittest.main()
