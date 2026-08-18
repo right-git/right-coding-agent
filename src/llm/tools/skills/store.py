@@ -110,6 +110,12 @@ class SkillStore:
                 self.registry.register(build_skill_tool(skill, self.seen_hashes), source=f"skill:{slug}")
                 self._registered[slug] = name
             except ValueError as error:
+                # Bookkeeping must match reality: the tool above was just
+                # unregistered (or never registered) and registration failed,
+                # so `_registered` must not keep claiming this slug is live —
+                # otherwise the skill silently vanishes from the registry
+                # with nothing left to trigger a retry on a later scan.
+                self._registered.pop(slug, None)
                 logger.warning("Skill {} not registered: {}", slug, error)
         self.skills = found
         self._fingerprint = self._current_fingerprint()

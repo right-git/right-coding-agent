@@ -103,5 +103,48 @@ class TestSkillStore(unittest.TestCase):
         self.assertNotIn("hidden", slugs)
 
 
+class _FailOnceRegistry(ToolRegistry):
+    """Test double: raises ValueError on the next register() call when armed."""
+
+    def __init__(self):
+        super().__init__()
+        self.fail_next = False
+
+    def register(self, tool_obj, source=None):
+        if self.fail_next:
+            self.fail_next = False
+            raise ValueError("simulated collision")
+        super().register(tool_obj, source=source)
+
+
+class TestSkillStoreRegistrationFailure(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name)
+        self.user_dir = base / "user"
+        self.user_dir.mkdir()
+        self.registry = _FailOnceRegistry()
+
+    def test_failed_reregister_clears_bookkeeping_and_self_heals(self):
+        make_skill_dir(self.user_dir, "flaky", "---\ndescription: d\n---\nbody\n")
+        store = SkillStore(user_dir=self.user_dir, project_dirs=[], registry=self.registry)
+        store.scan()
+        self.assertIn("flaky", store._registered)
+        self.assertIsNotNone(self.registry.get("skill__flaky"))
+
+        # Force the re-registration attempt (unregister-then-register on an
+        # unchanged skill) to fail, simulating a name collision.
+        self.registry.fail_next = True
+        store.scan()
+        self.assertNotIn("flaky", store._registered)
+        self.assertIsNone(self.registry.get("skill__flaky"))
+
+        # Collision cleared: the next scan retries from a clean state.
+        store.scan()
+        self.assertIn("flaky", store._registered)
+        self.assertIsNotNone(self.registry.get("skill__flaky"))
+
+
 if __name__ == "__main__":
     unittest.main()
