@@ -22,3 +22,6 @@ testscripts/
 logs.*
 models/
 .DS_Store
+# Claude worktrees and SDD scratch
+.claude/worktrees/
+.superpowers/
