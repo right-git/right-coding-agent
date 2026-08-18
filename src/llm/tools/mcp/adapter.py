@@ -7,7 +7,6 @@ string for an array, and the coercion table below is what made that safe in
 production.
 """
 
-import hashlib
 import json
 import re
 from collections.abc import Awaitable, Callable
@@ -18,27 +17,13 @@ from langchain_core.tools import StructuredTool
 from src.config.logging import logger
 
 from ..meta.attachments import attach_image
+from ..naming import MAX_TOOL_NAME_LENGTH, hashed_identifier, safe_part  # noqa: F401
 from .utils import read_field as _read_field
-
-_HASH_LENGTH = 8
-MAX_TOOL_NAME_LENGTH = 64
-_SAFE_PART_RE = re.compile(r"[^A-Za-z0-9]+")
-
-
-def _safe_part(value: str) -> str:
-    """Normalize a component to alphanumeric + underscores; fallback to 'x'."""
-    normalized = _SAFE_PART_RE.sub("_", str(value or "").strip()).strip("_")
-    return normalized or "x"
 
 
 def _identifier(server: str, tool: str) -> str:
     """Build an identifier from server and tool names; hash if too long."""
-    readable = f"mcp__{_safe_part(server)}__{_safe_part(tool)}"
-    if len(readable) <= MAX_TOOL_NAME_LENGTH:
-        return readable
-    digest = hashlib.sha256(f"{server}\x1f{tool}".encode()).hexdigest()[:_HASH_LENGTH]
-    suffix = f"_{digest}"
-    return readable[: MAX_TOOL_NAME_LENGTH - len(suffix)].rstrip("_") + suffix
+    return hashed_identifier(f"mcp__{safe_part(server)}__{safe_part(tool)}", f"{server}\x1f{tool}")
 
 
 def build_tool_name(server: str, remote_tool: str) -> str:
