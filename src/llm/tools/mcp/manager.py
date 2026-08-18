@@ -6,6 +6,14 @@ context managers unwind in the same task that entered them (anyio requires
 it). A stdio server's subprocess therefore lives for the whole REPL session.
 Every failure is contained: statuses record it, callers get error strings,
 and nothing here ever breaks startup or a turn.
+
+Reconnects are **generational**. Scripts call tools concurrently (`parallel`),
+so several callers can discover the same dead session at once: a per-connection
+lock serializes teardown+setup, a caller that finds the connection already
+healed reuses it instead of tearing it down again, and every connection task
+touches the shared `_Connection` only while it is still the current generation
+(`conn.task is asyncio.current_task()`). Without that guard a slow-unwinding
+old task would unregister the new generation's tools and null its live session.
 """
 
 import asyncio
@@ -31,6 +39,11 @@ STOP_TIMEOUT = 5.0
 # The session's own read timeout fires first; this outer guard only catches a
 # transport that never answers at all.
 TOOL_TIMEOUT_GRACE = 5.0
+# How much longer than the connect timeout `_connect` waits for the task to
+# report ready: the setup steps are individually bounded, but a transport that
+# hangs on context *exit* would otherwise never release the waiter, and a hung
+# `start()` is a hung REPL startup.
+CONNECT_GRACE = 10.0
 
 
 class ServerState(str, Enum):
@@ -66,6 +79,11 @@ class _Connection:
     tools: list = field(default_factory=list)
     prompts: list = field(default_factory=list)
     resources: list = field(default_factory=list)
+    # Bumped on every connect attempt; a task that is no longer the current
+    # generation must not touch the shared fields above.
+    generation: int = 0
+    # Serializes teardown+setup; created lazily inside the running loop.
+    lock: asyncio.Lock | None = None
 
 
 @asynccontextmanager
@@ -108,6 +126,7 @@ class McpManager:
         self._registry = registry
         # Public: the REPL assigns its status reporter after construction.
         self.on_status = on_status
+        self._stopping = False
         self._connections: dict[str, _Connection] = {
             name: _Connection(config) for name, config in self._configs.items()
         }
@@ -116,6 +135,17 @@ class McpManager:
 
     def _registry_or_default(self) -> ToolRegistry:
         return self._registry if self._registry is not None else get_registry()
+
+    @staticmethod
+    def _lock_of(conn: _Connection) -> asyncio.Lock:
+        """The connection's reconnect lock, created inside the running loop.
+
+        Never in `__init__`: a manager built before a loop exists (or reused
+        across `asyncio.run` calls) would carry a lock bound to a dead one.
+        """
+        if conn.lock is None:
+            conn.lock = asyncio.Lock()
+        return conn.lock
 
     def _require(self, name: str) -> _Connection:
         connection = self._connections.get(name)
@@ -198,41 +228,76 @@ class McpManager:
             logger.exception("Failed to unregister MCP tools of server [{}]", conn.config.name)
         conn.registered = []
 
-    async def _run_connection(self, conn: _Connection) -> None:
-        """The owning task: enters, serves, and unwinds one session."""
-        conn.stop_event = asyncio.Event()
+    def _owns(self, conn: _Connection) -> bool:
+        """True while the running task is still this connection's generation.
+
+        A task whose connection has been rebuilt underneath it (its `_connect`
+        timed out, or it was abandoned mid-teardown) must not write to the
+        shared `_Connection`: it would unregister the live generation's tools
+        and null its session.
+        """
+        return conn.task is asyncio.current_task()
+
+    async def _run_connection(self, conn: _Connection, ready: asyncio.Event, stop_event: asyncio.Event) -> None:
+        """The owning task: enters, serves, and unwinds one session.
+
+        `ready`/`stop_event` are passed in rather than read off `conn`, so a
+        late-unwinding task can never signal a newer generation's events.
+        """
         try:
             async with self._session_factory(conn.config, self._auth_for(conn.config)) as session:
                 await asyncio.wait_for(session.initialize(), timeout=settings.mcp_connect_timeout)
-                conn.session = session
                 await asyncio.wait_for(self._load_inventory(conn, session), timeout=settings.mcp_connect_timeout)
+                if not self._owns(conn):
+                    logger.warning("MCP server [{}] connected into a stale generation; unwinding", conn.config.name)
+                    return
+                conn.session = session
                 self._register_tools(conn)
                 self._set_state(conn, ServerState.CONNECTED)
-                conn.ready.set()
-                await conn.stop_event.wait()
+                ready.set()
+                await stop_event.wait()
         except asyncio.CancelledError:
             raise
         except Exception as error:
             logger.warning("MCP server [{}] failed: {}", conn.config.name, error)
-            self._set_state(conn, self._failure_state(conn.config, error), str(error))
+            if self._owns(conn):
+                self._set_state(conn, self._failure_state(conn.config, error), str(error))
         finally:
-            self._unregister_tools(conn)
-            conn.session = None
-            if conn.ready is not None:
-                conn.ready.set()
-            if conn.state == ServerState.CONNECTED:
-                self._set_state(conn, ServerState.DISCONNECTED)
+            if self._owns(conn):
+                self._unregister_tools(conn)
+                conn.session = None
+                if conn.state == ServerState.CONNECTED:
+                    self._set_state(conn, ServerState.DISCONNECTED)
+            ready.set()
 
     async def _connect(self, conn: _Connection) -> None:
+        if self._stopping:
+            return
         if conn.task is not None and not conn.task.done():
             return
-        conn.ready = asyncio.Event()
+        ready = conn.ready = asyncio.Event()
+        stop_event = conn.stop_event = asyncio.Event()
+        conn.generation += 1
         self._set_state(conn, ServerState.CONNECTING)
-        conn.task = asyncio.create_task(self._run_connection(conn), name=f"mcp:{conn.config.name}")
-        await conn.ready.wait()
+        conn.task = asyncio.create_task(
+            self._run_connection(conn, ready, stop_event),
+            name=f"mcp:{conn.config.name}",
+        )
+        try:
+            await asyncio.wait_for(ready.wait(), timeout=settings.mcp_connect_timeout + CONNECT_GRACE)
+        except asyncio.TimeoutError:
+            # The task stays `conn.task` so stop()/reconnect can still cancel
+            # it; it keeps unwinding in the background meanwhile.
+            stop_event.set()
+            self._set_state(conn, ServerState.FAILED, "connection setup timed out")
 
     async def _disconnect(self, conn: _Connection) -> None:
-        task, conn.task = conn.task, None
+        """Stop one connection task; `conn.task` stays set until it unwinds.
+
+        Clearing `conn.task` up front would make the task disown itself in its
+        own `finally` (see `_owns`) and skip unregistering.
+        """
+        task = conn.task
         if task is None:
             return
         if conn.stop_event is not None:
@@ -245,11 +310,15 @@ class McpManager:
             logger.warning("MCP server [{}] did not stop in time; cancelled", conn.config.name)
         except Exception as error:
             logger.warning("MCP server [{}] stopped with an error: {}", conn.config.name, error)
+        finally:
+            if conn.task is task:
+                conn.task = None
 
     # -------------------------------------------------------------- control
 
     async def start(self) -> None:
         """Connect every configured server concurrently; never raises."""
+        self._stopping = False
         if not self._connections:
             return
         results = await asyncio.gather(
@@ -262,6 +331,8 @@ class McpManager:
 
     async def stop(self) -> None:
         """Stop every connection; tools unregister as the tasks unwind."""
+        # Refuses in-flight reconnects a new task, so nothing survives exit.
+        self._stopping = True
         if not self._connections:
             return
         await asyncio.gather(
@@ -270,10 +341,22 @@ class McpManager:
         )
 
     async def reconnect(self, name: str) -> ServerStatus:
+        """Rebuild one connection, or reuse one another caller just healed.
+
+        The generation seen on entry decides: unchanged means nothing happened
+        while we waited for the lock, so this is a real (possibly manual)
+        reconnect; changed and connected means a concurrent caller already
+        rebuilt the session and tearing it down again would kill a healthy one.
+        """
         conn = self._require(name)
-        await self._disconnect(conn)
-        await self._connect(conn)
-        return self._status_of(conn)
+        seen = conn.generation
+        async with self._lock_of(conn):
+            if conn.generation != seen and conn.state == ServerState.CONNECTED:
+                logger.debug("MCP server [{}] was already reconnected by another caller", name)
+                return self._status_of(conn)
+            await self._disconnect(conn)
+            await self._connect(conn)
+            return self._status_of(conn)
 
     # ----------------------------------------------------------------- rpcs
 
