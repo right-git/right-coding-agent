@@ -129,16 +129,22 @@ def server_entry_json(config: McpServerConfig) -> dict:
 
 
 def _read_payload(file: Path) -> dict:
+    """Read JSON payload, raise ValueError if file exists but is unreadable."""
+    if not file.exists():
+        return {}
     try:
         payload = json.loads(file.read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else {}
-    except Exception:
-        return {}
+    except Exception as e:
+        logger.warning("Unreadable MCP config file [{}]", file)
+        raise ValueError(f"unreadable MCP config {file} — fix or delete it before modifying") from e
 
 
 def _write_payload(file: Path, payload: dict) -> None:
     file.parent.mkdir(parents=True, exist_ok=True)
-    file.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp_file = file.with_suffix(".json.tmp")
+    tmp_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp_file, file)
 
 
 def add_server(config: McpServerConfig, file: Path) -> None:

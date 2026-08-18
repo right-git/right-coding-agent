@@ -127,6 +127,30 @@ class TestPersistence(unittest.TestCase):
         self.assertEqual(scopes_containing("only-user", project_file=self.file, user_file=user), ["user"])
         self.assertEqual(scopes_containing("nope", project_file=self.file, user_file=user), [])
 
+    def test_add_to_unreadable_file_raises_and_preserves_content(self):
+        bad_json = "{not json"
+        self.file.write_text(bad_json, encoding="utf-8")
+        with self.assertRaises(ValueError):
+            add_server(McpServerConfig(name="new", command="x"), self.file)
+        self.assertEqual(self.file.read_text(encoding="utf-8"), bad_json)
+
+    def test_remove_from_unreadable_file_raises(self):
+        bad_json = "{not json"
+        self.file.write_text(bad_json, encoding="utf-8")
+        with self.assertRaises(ValueError):
+            remove_server("any", self.file)
+
+    def test_remove_preserves_foreign_keys(self):
+        write_json(
+            self.file,
+            {"otherTool": {"keep": True}, "mcpServers": {"a": {"command": "x"}, "b": {"command": "y"}}},
+        )
+        remove_server("a", self.file)
+        payload = json.loads(self.file.read_text(encoding="utf-8"))
+        self.assertEqual(payload["otherTool"], {"keep": True})
+        self.assertIn("b", payload["mcpServers"])
+        self.assertNotIn("a", payload["mcpServers"])
+
 
 if __name__ == "__main__":
     unittest.main()
