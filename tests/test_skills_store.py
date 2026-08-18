@@ -19,10 +19,23 @@ class TestProjectDirs(unittest.TestCase):
             (root / ".git").mkdir()
             nested = root / "apps" / "web"
             nested.mkdir(parents=True)
+            # Create only one of the three candidates; all should be returned.
             (root / ".agents" / "skills").mkdir(parents=True)
-            (nested / ".agents" / "skills").mkdir(parents=True)
+            # (root / "apps" / ".agents" / "skills").mkdir(parents=True)  # Intentionally NOT created
+            # (nested / ".agents" / "skills").mkdir(parents=True)  # Intentionally NOT created
             dirs = project_skills_dirs(nested)
-            self.assertEqual(dirs, [nested / ".agents" / "skills", root / ".agents" / "skills"])
+            # All candidates are returned, nearest first, regardless of existence.
+            # Walking from nested up to root includes nested, apps, and root levels.
+            expected = [
+                nested / ".agents" / "skills",  # nearest
+                root / "apps" / ".agents" / "skills",  # intermediate
+                root / ".agents" / "skills",  # git root
+            ]
+            self.assertEqual(dirs, expected)
+            # Verify ordering is nearest first (deeper paths come before shallower).
+            for i in range(len(dirs) - 1):
+                # Each subsequent dir should have fewer parts (is a parent).
+                self.assertGreater(len(dirs[i].parts), len(dirs[i + 1].parts))
 
 
 class TestSkillStore(unittest.TestCase):
@@ -101,6 +114,22 @@ class TestSkillStore(unittest.TestCase):
         slugs = [slug for slug, _, _ in store.user_commands()]
         self.assertIn("visible", slugs)
         self.assertNotIn("hidden", slugs)
+
+    def test_project_dir_created_after_init_is_discovered(self):
+        """Regression test: a project dir that doesn't exist at init should be
+        discovered when created later, without restarting the store."""
+        # Create a store with a project_dir that doesn't exist yet.
+        nonexistent_project = Path(self.tmp.name) / "future" / "project"
+        store = SkillStore(user_dir=self.user_dir, project_dirs=[nonexistent_project], registry=self.registry)
+        store.scan()
+        self.assertEqual(len(store.skills), 0)
+        # Create the project dir and add a skill.
+        nonexistent_project.mkdir(parents=True)
+        make_skill_dir(nonexistent_project, "late", BODY.format(n=5))
+        # Scan should now find the skill without restarting the store.
+        store.scan()
+        self.assertIsNotNone(store.get("late"))
+        self.assertIsNotNone(self.registry.get("skill__late"))
 
 
 class _FailOnceRegistry(ToolRegistry):

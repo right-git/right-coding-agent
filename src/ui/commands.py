@@ -853,6 +853,12 @@ class CommandHandler:
         words = argument.split()
         to_project = "--project" in words
         words = [word for word in words if word != "--project"]
+        if to_project and not words:
+            self.console.print(
+                "  specify skill names or 'all' (e.g. /skills import --project all)",
+                style="info",
+            )
+            return None
         from src.llm.tools.skills.store import PROJECT_SKILLS_SUBPATH
 
         target = (repo_root / PROJECT_SKILLS_SUBPATH) if to_project else DEFAULT_USER_SKILLS_DIR

@@ -27,7 +27,8 @@ _store: "SkillStore | None" = None
 
 
 def project_skills_dirs(cwd: Path) -> list[Path]:
-    """Every existing .agents/skills from cwd up to the git root, nearest first."""
+    """Every .agents/skills candidate from cwd up to the git root, nearest first,
+    regardless of current existence. scan() and _skill_files() skip non-dirs lazily."""
     dirs: list[Path] = []
     # Resolve only when necessary: an already-absolute cwd (the normal case —
     # Path.cwd() is always absolute) is used as-is so we don't normalize away
@@ -37,8 +38,7 @@ def project_skills_dirs(cwd: Path) -> list[Path]:
     current = cwd if cwd.is_absolute() else cwd.resolve()
     while True:
         candidate = current / PROJECT_SKILLS_SUBPATH
-        if candidate.is_dir():
-            dirs.append(candidate)
+        dirs.append(candidate)
         if (current / ".git").exists() or current.parent == current:
             return dirs
         current = current.parent
