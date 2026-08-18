@@ -828,8 +828,42 @@ class CommandHandler:
         return None
 
     def _skills_import(self, argument: str) -> None:
-        self.console.print(
-            "  import arrives with the importer — use: uv run python -m src.main skills import",
-            style="info",
-        )
+        from pathlib import Path
+
+        from src.llm.tools.skills.importer import default_foreign_sources, find_candidates, import_skills
+        from src.llm.tools.skills.store import DEFAULT_USER_SKILLS_DIR
+
+        store = self._skill_store()
+        existing = set(store.skills) if store is not None else set()
+        repo_root = Path.cwd()
+        candidates = find_candidates(default_foreign_sources(Path.home(), repo_root), existing)
+        if not candidates:
+            self.console.print("  no foreign skills found (Claude Code / Codex)", style="info")
+            return None
+        if not argument:
+            for candidate in candidates:
+                note = "  (already exists — skipped)" if candidate.collides else ""
+                line = f"  {candidate.slug:<24} {candidate.source:<15} {candidate.description[:50]}{note}"
+                self.console.print(line, style="info", markup=False, highlight=False)
+            self.console.print(
+                "  copy with: /skills import all — or /skills import <name> <name> (add --project for .agents/skills)",
+                style="info",
+            )
+            return None
+        words = argument.split()
+        to_project = "--project" in words
+        words = [word for word in words if word != "--project"]
+        from src.llm.tools.skills.store import PROJECT_SKILLS_SUBPATH
+
+        target = (repo_root / PROJECT_SKILLS_SUBPATH) if to_project else DEFAULT_USER_SKILLS_DIR
+        names = None if words == ["all"] else words
+        copied, skipped, failed = import_skills(candidates, target, names=names)
+        if store is not None:
+            store.scan()
+        summary = f"  imported {len(copied)}: {', '.join(copied) or '—'}"
+        if skipped:
+            summary += f"; skipped (exists): {', '.join(skipped)}"
+        if failed:
+            summary += f"; failed: {', '.join(failed)}"
+        self.console.print(summary, style="success" if copied else "info", markup=False, highlight=False)
         return None
