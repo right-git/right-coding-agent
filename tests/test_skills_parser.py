@@ -102,6 +102,12 @@ class TestSanitizeSlug(unittest.TestCase):
         self.assertEqual(sanitize_slug("my skill!"), "my_skill")
         self.assertEqual(sanitize_slug("///"), "x")
 
+    def test_lowercases(self):
+        # CommandHandler.handle lowercases the typed command before matching,
+        # so an uppercase-preserving slug would be listed/completed but
+        # never actually reachable via /slug.
+        self.assertEqual(sanitize_slug("Deploy"), "deploy")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,12 +6,14 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from prompt_toolkit.document import Document  # noqa: E402
 from rich.console import Console  # noqa: E402
 
 from src.llm.tools.meta.registry import ToolRegistry  # noqa: E402
 from src.llm.tools.skills.store import SkillStore, set_skill_store  # noqa: E402
 from src.ui.chat import theme  # noqa: E402
 from src.ui.commands import CommandHandler, SkillAction  # noqa: E402
+from src.ui.completer import CommandCompleter  # noqa: E402
 from tests.test_skills_parser import make_skill_dir  # noqa: E402
 
 
@@ -93,6 +95,37 @@ class TestSkillCommands(unittest.TestCase):
         self.assertIn("(shadowed by a built-in command)", line_for("temp"))
         self.assertIn("(shadowed by a built-in command)", line_for("exit"))
         self.assertNotIn("shadowed", line_for("deploy"))
+
+
+class TestUppercaseSlugReachable(unittest.TestCase):
+    """Regression: a skill directory with an uppercase name must still be
+    reachable via /slug — sanitize_slug lowercases so the store key matches
+    what CommandHandler.handle produces after it lowercases the typed
+    command, and what the completer offers matches what's actually usable."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        user_dir = Path(self.tmp.name)
+        make_skill_dir(user_dir, "Deploy", "---\ndescription: deploy it\n---\nDeploy now.\n")
+        self.store = SkillStore(user_dir=user_dir, project_dirs=[], registry=ToolRegistry())
+        self.store.scan()
+        set_skill_store(self.store)
+        self.addCleanup(set_skill_store, None)
+        self.ui = MagicMock()
+        self.ui.console = Console(record=True, width=120, theme=theme)
+        self.handler = CommandHandler(self.ui)
+
+    def test_lowercase_command_reaches_uppercase_named_skill(self):
+        result = self.handler.handle("/deploy")
+        self.assertIsInstance(result, SkillAction)
+        self.assertEqual(result.text, "Deploy now.\n")
+
+    def test_completer_offers_the_actually_reachable_slug(self):
+        completer = CommandCompleter(self.ui)
+        completions = [c.text for c in completer.get_completions(Document("/dep"), None)]
+        self.assertIn("/deploy", completions)
+        self.assertNotIn("/Deploy", completions)
 
 
 if __name__ == "__main__":

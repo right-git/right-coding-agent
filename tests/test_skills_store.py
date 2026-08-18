@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.llm.tools.meta.registry import ToolRegistry  # noqa: E402
+from src.llm.tools.skills.channel import collecting_skill_bodies  # noqa: E402
 from src.llm.tools.skills.store import SkillStore, project_skills_dirs  # noqa: E402
 from tests.test_skills_parser import make_skill_dir  # noqa: E402
 
@@ -144,6 +145,40 @@ class _FailOnceRegistry(ToolRegistry):
             self.fail_next = False
             raise ValueError("simulated collision")
         super().register(tool_obj, source=source)
+
+
+class TestResetSession(unittest.IsolatedAsyncioTestCase):
+    """reset_session() must forget delivered-body dedupe (seen_hashes) so a
+    skill re-delivers its body after /clear wipes the conversation history
+    that held it."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.user_dir = Path(self.tmp.name) / "user"
+        self.user_dir.mkdir()
+        make_skill_dir(self.user_dir, "task", "---\ndescription: d\n---\nbody\n")
+        self.registry = ToolRegistry()
+        self.store = SkillStore(user_dir=self.user_dir, project_dirs=[], registry=self.registry)
+        self.store.scan()
+        self.tool = self.registry.get("skill__task")
+
+    async def test_reset_session_allows_body_to_be_redelivered(self):
+        with collecting_skill_bodies() as bucket:
+            confirmation = await self.tool.ainvoke({"arguments": "", "force": False})
+        self.assertIn("loaded", confirmation)
+        self.assertNotIn("already loaded", confirmation)
+        self.assertIn("task", bucket)
+        self.assertIn("task", self.store.seen_hashes)
+
+        self.store.reset_session()
+        self.assertEqual(self.store.seen_hashes, {})
+
+        with collecting_skill_bodies() as bucket:
+            confirmation = await self.tool.ainvoke({"arguments": "", "force": False})
+        self.assertIn("loaded", confirmation)
+        self.assertNotIn("already loaded", confirmation)
+        self.assertIn("task", bucket)
 
 
 class TestSkillStoreRegistrationFailure(unittest.TestCase):

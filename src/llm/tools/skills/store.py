@@ -154,6 +154,13 @@ class SkillStore:
         self.seen_hashes[slug] = hashlib.sha256(rendered.encode()).hexdigest()
         return rendered
 
+    def reset_session(self) -> None:
+        """Forget delivered-body dedupe. Call when conversation history is
+        wiped (e.g. /clear) — otherwise a later skill call answers "already
+        loaded earlier this session" against a history that no longer
+        contains the body, and the model proceeds without instructions."""
+        self.seen_hashes.clear()
+
 
 def get_skill_store() -> SkillStore | None:
     return _store

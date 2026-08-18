@@ -95,6 +95,11 @@ async def main():
                     messages = []
                     session_usage = SessionUsage()
                     print_architecture_banner(ui)
+                    from src.llm.tools.skills.store import get_skill_store
+
+                    store = get_skill_store()
+                    if store is not None:
+                        store.reset_session()
                 model = ui.model
                 if isinstance(result, SkillAction):
                     user_content = result.text  # fall through into the turn below

@@ -22,8 +22,15 @@ _SLUG_RE = re.compile(r"[^A-Za-z0-9_-]+")
 
 
 def sanitize_slug(raw: str) -> str:
-    """Directory name -> command/tool-safe slug; falls back to 'x'."""
-    return _SLUG_RE.sub("_", str(raw or "").strip()).strip("_-") or "x"
+    """Directory name -> command/tool-safe slug; falls back to 'x'.
+
+    Lowercased so the slug is reachable everywhere it's used verbatim —
+    store keys, `skill__<slug>` tool names, `/<slug>` commands, and importer
+    candidate names: `CommandHandler.handle` lowercases the typed command
+    before matching, so an uppercase-preserving slug (e.g. a `Deploy/`
+    directory) would be listed and completed but never actually invocable.
+    """
+    return _SLUG_RE.sub("_", str(raw or "").strip()).strip("_-").lower() or "x"
 
 
 def split_frontmatter(text: str) -> tuple[str | None, str]:

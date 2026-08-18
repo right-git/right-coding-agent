@@ -463,6 +463,8 @@ async def main():
                 result = ui.handle_command(user_content)
                 if result == "clear":
                     messages = []
+                    if store is not None:
+                        store.reset_session()
                 model = ui.model
                 if isinstance(result, SkillAction):
                     user_content = result.text  # fall through into the turn below
