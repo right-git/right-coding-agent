@@ -10,6 +10,14 @@ production.
 import hashlib
 import json
 import re
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from langchain_core.tools import StructuredTool
+
+from src.config.logging import logger
+
+from ..meta.attachments import attach_image
 
 _HASH_LENGTH = 8
 MAX_TOOL_NAME_LENGTH = 64
@@ -191,3 +199,121 @@ def normalize_tool_arguments(arguments: dict, input_schema: dict | None) -> dict
         schema_type = _schema_type(schema)
         normalized[field_name] = _normalize_scalar(value, schema_type)
     return normalized
+
+
+def _read_field(value: Any, field_name: str, default=None):
+    """Read an attribute or dict key, tolerating either shape."""
+    if isinstance(value, dict):
+        return value.get(field_name, default)
+    return getattr(value, field_name, default)
+
+
+def _serialize_content_item(item: Any, *, server: str, tool_name: str, parts: list[str]) -> None:
+    """Render one MCP content block into `parts`, routing images out of band."""
+    item_type = _read_field(item, "type")
+    if item_type == "text":
+        parts.append(str(_read_field(item, "text", "")))
+        return
+    if item_type == "image":
+        data = _read_field(item, "data", "") or ""
+        mime = _read_field(item, "mimeType") or "image/png"
+        if attach_image(data, mime, label=f"{server}:{tool_name}"):
+            parts.append("[image attached — you will see it right after this result]")
+        else:
+            parts.append(f"[image result ({mime}, {len(data)} base64 chars) — no attachment channel open]")
+        return
+    if item_type == "audio":
+        parts.append(f"[audio result ({_read_field(item, 'mimeType')}) — not supported]")
+        return
+    if item_type == "resource":
+        resource = _read_field(item, "resource")
+        summary = {"type": "resource", "uri": str(_read_field(resource, "uri", ""))}
+        text = _read_field(resource, "text")
+        if text is not None:
+            summary["text"] = text
+        blob = _read_field(resource, "blob")
+        if blob is not None:
+            summary["blob_chars"] = len(blob) if isinstance(blob, str) else None
+        parts.append(json.dumps(summary, ensure_ascii=False))
+        return
+    if item_type == "resource_link":
+        parts.append(
+            json.dumps(
+                {
+                    "type": "resource_link",
+                    "name": _read_field(item, "name"),
+                    "uri": str(_read_field(item, "uri", "")),
+                    "description": _read_field(item, "description"),
+                },
+                ensure_ascii=False,
+            )
+        )
+        return
+    parts.append(repr(item))
+
+
+def serialize_call_result(result: Any, *, server: str, tool_name: str) -> str:
+    """Render a `CallToolResult` into text for the model.
+
+    Text content passes through, images are routed to the attachment side
+    channel (`attach_image`) and replaced with a stub, structured content is
+    appended as JSON, and an `isError` result is prefixed for visibility.
+    """
+    parts: list[str] = []
+    for item in _read_field(result, "content", []) or []:
+        _serialize_content_item(item, server=server, tool_name=tool_name, parts=parts)
+    structured = _read_field(result, "structuredContent")
+    if structured is not None:
+        parts.append(json.dumps(structured, ensure_ascii=False, default=repr))
+    text = "\n".join(part for part in parts if part) or "(empty result)"
+    if _read_field(result, "isError", False):
+        return f"[mcp error] {server}: {text}"
+    return text
+
+
+def _annotation_marker(remote_tool: Any) -> str:
+    """Prefix hint from MCP tool annotations, if the tool has any."""
+    annotations = _read_field(remote_tool, "annotations")
+    if annotations is None:
+        return ""
+    if _read_field(annotations, "destructiveHint"):
+        return " [DESTRUCTIVE]"
+    if _read_field(annotations, "readOnlyHint"):
+        return " [read-only]"
+    return ""
+
+
+def build_mcp_tool(
+    server: str,
+    remote_tool: Any,
+    call: Callable[[str, dict], Awaitable[Any]],
+) -> StructuredTool:
+    """Adapt a remote MCP tool (SDK `Tool`) into a LangChain `StructuredTool`.
+
+    `call(remote_tool_name, normalized_args)` performs the actual RPC and
+    returns a `CallToolResult`; the wrapper never raises — failures (bad
+    arguments, transport errors, remote exceptions) come back as an
+    "[mcp error] ..." string so a flaky server tool degrades a script step
+    rather than blowing up the whole run.
+    """
+    remote_name = str(_read_field(remote_tool, "name") or "")
+    tool_name = build_tool_name(server, remote_name)
+    input_schema = _read_field(remote_tool, "inputSchema") or {"type": "object", "properties": {}}
+    description = (_read_field(remote_tool, "description") or remote_name).strip()
+    description = f"{description}{_annotation_marker(remote_tool)} (MCP server: {server})"
+
+    async def run(**kwargs: Any) -> str:
+        try:
+            arguments = normalize_tool_arguments(kwargs, input_schema)
+            result = await call(remote_name, arguments)
+            return serialize_call_result(result, server=server, tool_name=remote_name)
+        except Exception as error:
+            logger.exception("MCP tool failed server [{}] tool [{}]", server, remote_name)
+            return f"[mcp error] {server}.{remote_name}: {error}"
+
+    return StructuredTool(
+        name=tool_name,
+        description=description,
+        args_schema=input_schema,
+        coroutine=run,
+    )
