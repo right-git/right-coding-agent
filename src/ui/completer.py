@@ -27,6 +27,7 @@ COMMANDS: dict[str, str] = {
     "/log-level": "show or change log level",
     "/mcp": "MCP servers: status / reconnect / login / logout",
     "/tool": "pin a tool for the next message",
+    "/skills": "skills: list / reload / import",
     "/clear": "clear screen and history",
     "/quit": "exit",
 }
@@ -49,6 +50,11 @@ class CommandCompleter(Completer):
             for command, description in self._mcp_prompt_commands():
                 if command.startswith(needle):
                     yield Completion(command, start_position=-len(text), display_meta=description)
+            for slug, hint, description in self._skill_commands():
+                candidate = f"/{slug}"
+                if candidate.startswith(needle) and candidate not in COMMANDS:
+                    meta = f"skill {hint}".strip() if hint else description[:40]
+                    yield Completion(candidate, start_position=-len(text), display_meta=meta)
             return
 
         command, _, argument = text.partition(" ")
@@ -89,6 +95,9 @@ class CommandCompleter(Completer):
         if command == "/tool":
             yield from self._tool_name_completions(word)
             return
+        if command == "/skills":
+            yield from self._option_completions(word, ("reload", "import"))
+            return
 
     def _model_completions(self, word: str):
         matched, _ = self.ui.commands.catalog_matches(word)
@@ -117,6 +126,16 @@ class CommandCompleter(Completer):
             from src.llm.tools.mcp.manager import get_mcp_manager
 
             return get_mcp_manager().prompt_commands()
+        except Exception:
+            return []
+
+    @staticmethod
+    def _skill_commands() -> list[tuple[str, str, str]]:
+        try:
+            from src.llm.tools.skills.store import get_skill_store
+
+            store = get_skill_store()
+            return store.user_commands() if store is not None else []
         except Exception:
             return []
 
