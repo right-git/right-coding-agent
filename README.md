@@ -137,6 +137,8 @@ the production agent, then compare the usage footers — see
 - `/paste` — attach an image from the clipboard to your next message (a screenshot, a copied picture, or a copied image file); in terminals that forward the key, plain **Ctrl+V** in the input does the same and inserts an `[image N]` placeholder;
 - `/sound [on|off]` — toggle the completion sound played when a turn finishes (`assets/sounds/done.mp3`);
 - `/voice [on|off]` — whether the agent speaks its replies (needs `ENABLE_VOICE_MODEL=1`; push-to-talk input is always on then);
+- `/mcp [reconnect|login|logout <name>]` — status of connected MCP servers, or manage one connection; servers themselves are registered outside the chat with `uv run python -m src.main mcp add <name> -- <command> [args...]` (or a `http(s)://` url with `--transport http|sse`) — see `mcp --help` for `add-json`/`list`/`get`/`remove`;
+- `/tool <name>` — pin one tool's full contract onto your next message so the model can skip discovery for it (MCP tools included, e.g. `/tool mcp__everything__echo`);
 - `/log-level [name]`, `/clear`, `/help`, `/quit`.
 
 ### Voice
