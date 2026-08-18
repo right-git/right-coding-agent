@@ -49,13 +49,15 @@ class McpAction:
     argument: str
 
 
-def _map_prompt_arguments(words: list[str], arguments: list) -> dict[str, str]:
+def _map_prompt_arguments(words: list[str], arguments: list | None) -> dict[str, str]:
     """Whitespace-split words onto prompt arguments, positionally.
 
     Extra words beyond the argument count join into the last argument; with
-    no declared arguments (or no words), the mapping is empty.
+    no declared arguments (or no words), the mapping is empty. The MCP SDK's
+    `Prompt.arguments` defaults to `None` (not `[]`) for a no-argument
+    prompt, so `None` is treated the same as an empty list here.
     """
-    names = [argument.name for argument in arguments]
+    names = [argument.name for argument in (arguments or [])]
     mapping: dict[str, str] = {}
     for index, name in enumerate(names):
         if index >= len(words):
@@ -109,7 +111,7 @@ async def run_mcp_action(action: McpAction, manager, console) -> str | None:
         console.print(f"  unknown MCP action: {action.kind}", style=MCP_ERROR)
         return None
     except Exception as error:
-        console.print(f"  {error}", style=MCP_ERROR)
+        console.print(f"  {error}", style=MCP_ERROR, markup=False, highlight=False)
         return None
 
 
@@ -635,7 +637,7 @@ class CommandHandler:
         if prompts:
             self.console.print()
             for command, description in prompts:
-                self.console.print(f"  {command:<28} {description}", style=MCP_INFO)
+                self.console.print(f"  {command:<28} {description}", style=MCP_INFO, markup=False, highlight=False)
 
         self.console.print()
         self.console.print(self._MCP_HINT, style=MCP_INFO)
@@ -654,7 +656,7 @@ class CommandHandler:
             if prompts:
                 self.console.print("  available:", style=MCP_INFO)
                 for cmd, description in prompts:
-                    self.console.print(f"    {cmd:<28} {description}", style=MCP_INFO)
+                    self.console.print(f"    {cmd:<28} {description}", style=MCP_INFO, markup=False, highlight=False)
             else:
                 self.console.print("  no MCP prompt commands are available", style=MCP_INFO)
             return None

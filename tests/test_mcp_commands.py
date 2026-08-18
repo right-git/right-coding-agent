@@ -22,11 +22,19 @@ class FakeManager:
         ]
 
     def prompt_commands(self):
-        return [("/mcp__pw__review", "Review code")]
+        return [
+            ("/mcp__pw__review", "Review code"),
+            # A zero-arg prompt (arguments=None, as the real MCP SDK ships
+            # it — not []) with a description that looks like mismatched
+            # rich markup, to guard both known review-bot findings at once.
+            ("/mcp__pw__greet", "[weird]tag[/mismatch]"),
+        ]
 
     def find_prompt(self, command):
         if command == "/mcp__pw__review":
             return ("pw", type("P", (), {"name": "review", "arguments": []})())
+        if command == "/mcp__pw__greet":
+            return ("pw", type("P", (), {"name": "greet", "arguments": None})())
         return None
 
     async def reconnect(self, name):
@@ -72,6 +80,17 @@ class TestMcpCommand(unittest.TestCase):
         self.assertIsNone(self.handler.handle("/mcp__nope__x"))
         self.assertIn("unknown", self.output().lower())
 
+    def test_mcp_status_renders_markup_like_prompt_description_verbatim(self):
+        # A server-supplied description containing bracket text that looks
+        # like mismatched rich markup ("[weird]tag[/mismatch]") must not
+        # raise MarkupError and must show up unmangled.
+        self.assertIsNone(self.handler.handle("/mcp"))
+        self.assertIn("[weird]tag[/mismatch]", self.output())
+
+    def test_unknown_prompt_listing_renders_markup_like_description_verbatim(self):
+        self.assertIsNone(self.handler.handle("/mcp__nope__x"))
+        self.assertIn("[weird]tag[/mismatch]", self.output())
+
 
 class TestRunMcpAction(unittest.TestCase):
     def setUp(self):
@@ -88,6 +107,13 @@ class TestRunMcpAction(unittest.TestCase):
         out = asyncio.run(run_mcp_action(action, self.manager, self.console))
         self.assertIn("PROMPT pw/review", out)
 
+    def test_prompt_with_none_arguments_still_fetches_text(self):
+        # Real MCP servers ship `Prompt.arguments=None` (not []) for a
+        # zero-argument prompt; `_map_prompt_arguments` must not crash on it.
+        action = McpAction("prompt", "/mcp__pw__greet")
+        out = asyncio.run(run_mcp_action(action, self.manager, self.console))
+        self.assertIn("PROMPT pw/greet", out)
+
     def test_failures_print_not_raise(self):
         async def boom(name):
             raise RuntimeError("down")
@@ -96,6 +122,17 @@ class TestRunMcpAction(unittest.TestCase):
         out = asyncio.run(run_mcp_action(McpAction("reconnect", "pw"), self.manager, self.console))
         self.assertIsNone(out)
         self.assertIn("down", self.console.file.getvalue())
+
+    def test_error_text_with_markup_like_characters_does_not_raise(self):
+        # The catch-all except branch prints exception text verbatim; a
+        # message containing bracket text must not be parsed as rich markup.
+        async def boom(name):
+            raise RuntimeError("[weird]tag[/mismatch]")
+
+        self.manager.reconnect = boom
+        out = asyncio.run(run_mcp_action(McpAction("reconnect", "pw"), self.manager, self.console))
+        self.assertIsNone(out)
+        self.assertIn("[weird]tag[/mismatch]", self.console.file.getvalue())
 
 
 if __name__ == "__main__":
