@@ -3,6 +3,7 @@ import os
 import signal
 import threading
 import time
+from pathlib import Path
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from src.config.logging import logger
@@ -17,7 +18,7 @@ from src.llm.utils import (
     trim_incomplete_tool_calls,
 )
 from src.ui import ChatUI
-from src.ui.commands import McpAction, run_mcp_action
+from src.ui.commands import McpAction, SkillAction, run_mcp_action
 from src.ui.interrupt import InterruptPolicy, TurnCancelled
 
 # The startup model comes from .env (LLM_DEFAULT_MODEL); /model can switch
@@ -423,6 +424,16 @@ async def main():
     mcp_manager.on_status = lambda name, state: ui.set_model_status(f"mcp:{name}", _status_word(state))
     mcp_task = asyncio.create_task(mcp_manager.start())
 
+    from src.llm.tools.skills.store import get_skill_store, skills_startup_report, start_skill_store
+
+    try:
+        skill_store = start_skill_store()
+        notice = skills_startup_report(skill_store, auto_import=settings.skills_auto_import, repo_root=Path.cwd())
+        if notice:
+            ui.console.print(f"  {notice}", style="dim", markup=False, highlight=False)
+    except Exception:
+        logger.exception("Skill store startup failed")
+
     current_turn: dict = {"task": None}
     try:
         asyncio.get_running_loop().add_signal_handler(
@@ -438,6 +449,13 @@ async def main():
             if not user_content.strip():
                 continue
 
+            store = get_skill_store()
+            if store is not None:
+                try:
+                    store.refresh()
+                except Exception:
+                    logger.exception("Skill refresh failed")
+
             if catalog_task.done() and not ui.model_catalog:
                 ui.set_model_catalog(await catalog.models())
 
@@ -445,8 +463,12 @@ async def main():
                 result = ui.handle_command(user_content)
                 if result == "clear":
                     messages = []
+                    if store is not None:
+                        store.reset_session()
                 model = ui.model
-                if isinstance(result, McpAction):
+                if isinstance(result, SkillAction):
+                    user_content = result.text  # fall through into the turn below
+                elif isinstance(result, McpAction):
                     # Run it the way a turn runs: `/mcp login` blocks on the
                     # browser for up to CALLBACK_TIMEOUT, and awaiting it
                     # straight from the loop left no way out -- Esc needs the
@@ -506,6 +528,10 @@ def cli_main() -> None:
         from src.llm.tools.mcp.cli import run_mcp_cli
 
         raise SystemExit(run_mcp_cli(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "skills":
+        from src.llm.tools.skills.cli import run_skills_cli
+
+        raise SystemExit(run_skills_cli(sys.argv[2:]))
     asyncio.run(main())
 
 

@@ -25,6 +25,16 @@ CLEAR_WORDS = ("none", "off", "default")
 MAX_LISTED_MATCHES = 8
 MAX_SEARCH_RESULTS = 15
 MCP_SUBCOMMANDS = ("reconnect", "login", "logout")
+# The few built-in commands `handle()` matches by more than one spelling.
+# Named here (instead of as inline literals in `handle()`) so `_skills()`'s
+# shadow-detection can union them with `completer.COMMANDS`'s canonical
+# names — an alias added to only one of the two spots would silently make
+# `/skills` claim a shadowed slug (e.g. "temp", "exit") is plain
+# user-invocable when it is actually unreachable at runtime.
+QUIT_COMMANDS = ("/quit", "/exit", "/q")
+TEMPERATURE_COMMANDS = ("/temperature", "/temp")
+LOG_LEVEL_COMMANDS = ("/log-level", "/loglevel")
+COMMAND_ALIASES = QUIT_COMMANDS + TEMPERATURE_COMMANDS + LOG_LEVEL_COMMANDS
 TOOL_DIRECTIVE_HEADER = (
     "[Tool directive: use the tool(s) below for this request — the user "
     "picked them explicitly. Contracts follow; no need for search_tools/get_tool.]"
@@ -51,6 +61,14 @@ class McpAction:
 
     kind: str
     argument: str
+
+
+@dataclass(frozen=True)
+class SkillAction:
+    """A `/slug` skill invocation: `text` is the rendered body the main loop
+    feeds in as the user turn (the MCP-prompt mechanic, but synchronous)."""
+
+    text: str
 
 
 def _map_prompt_arguments(words: list[str], arguments: list | None) -> dict[str, str]:
@@ -148,13 +166,14 @@ class CommandHandler:
     def console(self):
         return self.ui.console
 
-    def handle(self, text: str) -> str | McpAction | None:
+    def handle(self, text: str) -> "str | McpAction | SkillAction | None":
+        self._skill_handled = False
         stripped = text.strip()
         command, _, argument = stripped.partition(" ")
         command = command.lower()
         argument = argument.strip()
 
-        if command in ("/quit", "/exit", "/q"):
+        if command in QUIT_COMMANDS:
             self.ui.print_goodbye()
             sys.exit(0)
         if command == "/help":
@@ -165,7 +184,7 @@ class CommandHandler:
             return self._switch_model(argument) if argument else self._print_models("")
         if command == "/effort":
             return self._switch_effort(argument)
-        if command in ("/temperature", "/temp"):
+        if command in TEMPERATURE_COMMANDS:
             return self._switch_temperature(argument)
         if command == "/paste":
             return self._paste_image()
@@ -177,7 +196,7 @@ class CommandHandler:
             return self._toggle_voice(argument)
         if command == "/check":
             return self._run_check()
-        if command in ("/log-level", "/loglevel"):
+        if command in LOG_LEVEL_COMMANDS:
             return self._switch_log_level(argument) if argument else self._print_log_level()
         if command == "/clear":
             self.ui.pending_images.clear()
@@ -190,8 +209,14 @@ class CommandHandler:
             return self._mcp_prompt(stripped)
         if command == "/tool":
             return self._tool_pin(argument)
+        if command == "/skills":
+            return self._skills(argument)
+        skill_action = self._skill_prompt(command, argument)
+        if skill_action is not None:
+            return skill_action
 
-        self.console.print(f"  unknown command: {command} — try /help", style="error")
+        if not self._skill_handled:
+            self.console.print(f"  unknown command: {command} — try /help", style="error")
         return None
 
     # ------------------------------------------------------------------ help
@@ -211,6 +236,7 @@ class CommandHandler:
             ("/log-level [name]", "show or change the log level"),
             ("/mcp", "MCP servers: status, reconnect <name>, login/logout <name>"),
             ("/tool <name>", "pin a tool for the next message (its contract goes along)"),
+            ("/skills", "skills: list, reload, import; invoke one with /<skill-name> [args]"),
             ("/clear", "clear screen and history"),
             ("/quit", "exit"),
         ]
@@ -740,4 +766,110 @@ class CommandHandler:
             markup=False,
             highlight=False,
         )
+        return None
+
+    # ------------------------------------------------------------- skills
+
+    def _skill_store(self):
+        from src.llm.tools.skills.store import get_skill_store
+
+        return get_skill_store()
+
+    def _skill_prompt(self, command: str, argument: str) -> "SkillAction | None":
+        store = self._skill_store()
+        if store is None:
+            return None
+        slug = command[1:]
+        skill = store.get(slug)
+        if skill is None or not skill.user_invocable:
+            return None
+        try:
+            return SkillAction(text=store.render_for_user(slug, argument))
+        except Exception as error:
+            self._skill_handled = True
+            self.console.print(f"  skill '{slug}' failed: {error}", style="error", markup=False, highlight=False)
+            return None
+
+    def _skills(self, argument: str) -> None:
+        store = self._skill_store()
+        if store is None or (not store.skills and not argument):
+            self.console.print(
+                "  no skills found — put them in .agents/skills or ~/.right-agent/skills, "
+                "or import with /skills import",
+                style="info",
+                markup=False,
+                highlight=False,
+            )
+            return None
+        sub, _, rest = argument.partition(" ")
+        if sub == "reload":
+            store.scan()
+            self.console.print(f"  reloaded: {len(store.skills)} skill(s)", style="success")
+            return None
+        if sub == "import":
+            return self._skills_import(rest.strip())
+        if sub:
+            self.console.print("  usage: /skills, /skills reload, /skills import [all|names...]", style="error")
+            return None
+        from src.ui.completer import COMMANDS as _BUILTINS
+
+        builtin_names = frozenset(_BUILTINS) | frozenset(COMMAND_ALIASES)
+        self.console.print()
+        for skill in sorted(store.skills.values(), key=lambda item: item.slug):
+            who = {(True, True): "user+model", (True, False): "user", (False, True): "model"}.get(
+                (skill.user_invocable, skill.model_invocable), "none (dead)"
+            )
+            head = skill.description[:70]
+            line = f"  /{skill.slug:<22} {skill.scope:<8} {who:<11} {head}"
+            if f"/{skill.slug}" in builtin_names:
+                line += "  (shadowed by a built-in command)"
+            self.console.print(line, style="info", markup=False, highlight=False)
+        self.console.print()
+        return None
+
+    def _skills_import(self, argument: str) -> None:
+        from pathlib import Path
+
+        from src.llm.tools.skills.importer import default_foreign_sources, find_candidates, import_skills
+        from src.llm.tools.skills.store import DEFAULT_USER_SKILLS_DIR
+
+        store = self._skill_store()
+        existing = set(store.skills) if store is not None else set()
+        repo_root = Path.cwd()
+        candidates = find_candidates(default_foreign_sources(Path.home(), repo_root), existing)
+        if not candidates:
+            self.console.print("  no foreign skills found (Claude Code / Codex)", style="info")
+            return None
+        if not argument:
+            for candidate in candidates:
+                note = "  (already exists — skipped)" if candidate.collides else ""
+                line = f"  {candidate.slug:<24} {candidate.source:<15} {candidate.description[:50]}{note}"
+                self.console.print(line, style="info", markup=False, highlight=False)
+            self.console.print(
+                "  copy with: /skills import all — or /skills import <name> <name> (add --project for .agents/skills)",
+                style="info",
+            )
+            return None
+        words = argument.split()
+        to_project = "--project" in words
+        words = [word for word in words if word != "--project"]
+        if to_project and not words:
+            self.console.print(
+                "  specify skill names or 'all' (e.g. /skills import --project all)",
+                style="info",
+            )
+            return None
+        from src.llm.tools.skills.store import PROJECT_SKILLS_SUBPATH
+
+        target = (repo_root / PROJECT_SKILLS_SUBPATH) if to_project else DEFAULT_USER_SKILLS_DIR
+        names = None if words == ["all"] else words
+        copied, skipped, failed = import_skills(candidates, target, names=names)
+        if store is not None:
+            store.scan()
+        summary = f"  imported {len(copied)}: {', '.join(copied) or '—'}"
+        if skipped:
+            summary += f"; skipped (exists): {', '.join(skipped)}"
+        if failed:
+            summary += f"; failed: {', '.join(failed)}"
+        self.console.print(summary, style="success" if copied else "info", markup=False, highlight=False)
         return None

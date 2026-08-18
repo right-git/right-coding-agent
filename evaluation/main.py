@@ -17,6 +17,7 @@ from src.llm.types import LLMProvider
 from src.llm.statistics import SessionUsage
 from src.main import available_models, preload_vision_model, process_user_turn
 from src.ui import ChatUI
+from src.ui.commands import SkillAction
 
 from .direct_agent import DirectAgents
 from .direct_tools import DIRECT_TOOLS, schema_token_estimate
@@ -72,6 +73,13 @@ async def main():
     logger.info("Started the DIRECT-architecture evaluation REPL")
 
     try:
+        from src.llm.tools.skills.store import start_skill_store
+
+        start_skill_store()
+    except Exception:
+        logger.exception("Skill store startup failed (evaluation)")
+
+    try:
         while True:
             user_content = await ui.get_input()
 
@@ -87,8 +95,16 @@ async def main():
                     messages = []
                     session_usage = SessionUsage()
                     print_architecture_banner(ui)
+                    from src.llm.tools.skills.store import get_skill_store
+
+                    store = get_skill_store()
+                    if store is not None:
+                        store.reset_session()
                 model = ui.model
-                continue
+                if isinstance(result, SkillAction):
+                    user_content = result.text  # fall through into the turn below
+                else:
+                    continue
 
             messages = await process_user_turn(
                 agents=agents,
