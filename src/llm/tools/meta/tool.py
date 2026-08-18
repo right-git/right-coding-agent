@@ -25,9 +25,10 @@ from langchain_core.tools import tool
 from src.config.logging import logger
 
 from ...statistics.script_calls import counting_script_calls
+from ..skills.channel import collecting_skill_bodies
 from .attachments import collecting_images
 from .defaults import get_registry
-from .registry import SEARCH_LIMIT, ToolRegistry
+from .registry import SEARCH_LIMIT, SKILL_SOURCE_PREFIX, ToolRegistry
 from .sandbox import Interpreter
 
 MAX_RESULT_CHARS = 40_000
@@ -116,7 +117,7 @@ def _server_listing(registry: ToolRegistry, query: str, server: str) -> str:
     return "\n".join(lines)
 
 
-async def search_tools(query: str, only_mcp: bool = False, server: str = "") -> str:
+async def search_tools(query: str, only_mcp: bool = False, server: str = "", only_skills: bool = False) -> str:
     """Keyword search over the registry; one `signature — summary` per line.
 
     Callable from inside run_tools scripts (and directly as a library
@@ -127,14 +128,20 @@ async def search_tools(query: str, only_mcp: bool = False, server: str = "") -> 
     registry = get_registry()
     if server:
         return _server_listing(registry, query, server)
-    source_prefix = "mcp:" if only_mcp else None
+    if only_mcp and only_skills:
+        return "Pass only one of only_mcp / only_skills."
+    source_prefix = "mcp:" if only_mcp else (SKILL_SOURCE_PREFIX if only_skills else None)
     matches = registry.search_all(query, source_prefix=source_prefix)
     header = f"Tools matching {query!r}:" if query.split() else "Every registered tool:"
     if not matches and query.split():
         matches = registry.search_all("", source_prefix=source_prefix)
         header = f"Nothing matched {query!r}; every registered tool:"
     if not matches:
-        return "No MCP tools are registered." if only_mcp else "No tools are registered."
+        if only_mcp:
+            return "No MCP tools are registered."
+        if only_skills:
+            return "No skills are registered. Skills live in .agents/skills and ~/.right-agent/skills."
+        return "No tools are registered."
 
     native = [match for match in matches if registry.mcp_server_of(match.name) is None]
     by_server: dict[str, list] = {}
@@ -226,7 +233,12 @@ async def run_tools(code: str) -> tuple[str, list[dict]]:
     full contracts — they arrive in this result's `contracts` field
     automatically, so call it as a bare statement and never print or return
     its value. Tools provided by connected MCP servers are listed with an
-    [MCP: <server>] marker; pass only_mcp=True to browse only those. An MCP
+    [MCP: <server>] marker; pass only_mcp=True to browse only those.
+    Pass only_skills=True to browse only skills — reusable instruction packs
+    listed with a [Skill] marker. Calling a skill__<name> tool loads its
+    instructions into this result's `skills` field (dedup: an unchanged
+    skill answers "already loaded"; pass force=True to resend); follow
+    those instructions for the task. An MCP
     server with many matches collapses into one summary line with its match
     count — drill in with search_tools("query", server="thatname"), and
     search_tools("", server="thatname") lists that server's whole
@@ -287,7 +299,8 @@ async def run_tools(code: str) -> tuple[str, list[dict]]:
         JSON object with `result` (the returned value), `logs` (print
         output), `error` (null on success, otherwise why the run stopped),
         `contracts` (full contracts of every tool the script passed to
-        get_tool), and `attached_images` when the run captured screenshots
+        get_tool), `skills` (instruction bodies of every skill the script
+        invoked), and `attached_images` when the run captured screenshots
         for you.
     """
     try:
@@ -296,7 +309,7 @@ async def run_tools(code: str) -> tuple[str, list[dict]]:
         table = dict(registry.callables())
         table.update(_script_meta_callables(registry, contracts))
         interpreter = Interpreter(table)
-        with collecting_images() as images, counting_script_calls() as calls:
+        with collecting_images() as images, counting_script_calls() as calls, collecting_skill_bodies() as skill_bodies:
             outcome = await interpreter.run(code)
         outcome["logs"], removed_decoration = _strip_decoration(outcome["logs"])
         if removed_decoration:
@@ -313,15 +326,25 @@ async def run_tools(code: str) -> tuple[str, list[dict]]:
         if calls[0]:
             outcome["tool_calls"] = calls[0]
         logger.info(
-            "run_tools finished ops [{}] logs [{}] tool_calls [{}] " "contracts [{}] images [{}] error [{}]",
+            "run_tools finished ops [{}] logs [{}] tool_calls [{}] "
+            "contracts [{}] skills [{}] images [{}] error [{}]",
             interpreter.ops,
             len(outcome["logs"]),
             calls[0],
             len(contracts),
+            len(skill_bodies),
             len(images),
             outcome["error"],
         )
-        return _clip(json.dumps(outcome, ensure_ascii=False, default=repr)), images
+        serialized = _clip(json.dumps(outcome, ensure_ascii=False, default=repr))
+        if skill_bodies:
+            try:
+                rebuilt = json.loads(serialized)
+            except ValueError:  # the generic clip cut mid-structure
+                rebuilt = {"result": serialized}
+            rebuilt["skills"] = dict(skill_bodies)
+            serialized = json.dumps(rebuilt, ensure_ascii=False)
+        return serialized, images
     except Exception as error:
         return f"Tool call failed, error: {error}", []
 

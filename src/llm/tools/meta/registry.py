@@ -15,6 +15,7 @@ from ...statistics.script_calls import count_script_call
 
 SEARCH_LIMIT = 8
 MCP_SOURCE_PREFIX = "mcp:"
+SKILL_SOURCE_PREFIX = "skill:"
 
 # Names the interpreter resolves before the tool table (its builtins and the
 # `parallel` special form), plus the meta names run_tools injects into every
@@ -200,6 +201,8 @@ class ToolRegistry:
         source = self._sources.get(tool_obj.name) or ""
         if source.startswith(MCP_SOURCE_PREFIX):
             line += f" [MCP: {source[len(MCP_SOURCE_PREFIX):]}]"
+        elif source.startswith(SKILL_SOURCE_PREFIX):
+            line += " [Skill]"
         return line
 
     def document(self, name: str) -> str | None:
