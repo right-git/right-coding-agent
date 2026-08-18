@@ -81,11 +81,23 @@ def read_raw_entries(file: Path) -> dict[str, dict]:
     return servers if isinstance(servers, dict) else {}
 
 
+def config_from_entry(name: str, entry: dict, scope: str) -> McpServerConfig:
+    """Build a config from a raw on-disk-shaped entry (`type` maps to `transport`).
+
+    Shared by config loading (post env-expansion) and the `add-json` CLI
+    command (raw, no expansion — placeholders stay placeholders until load
+    time); raises on an invalid entry rather than swallowing, so callers
+    that want "skip and warn" do that themselves (see `_parse_entry`).
+    """
+    payload = dict(entry)
+    transport = payload.pop("type", None) or ("stdio" if payload.get("command") else "http")
+    return McpServerConfig(name=name, transport=transport, scope=scope, **payload)
+
+
 def _parse_entry(name: str, entry: dict, scope: str, env: Mapping[str, str]) -> McpServerConfig | None:
     expanded = _expand_entry(dict(entry), env)
-    transport = expanded.pop("type", None) or ("stdio" if expanded.get("command") else "http")
     try:
-        return McpServerConfig(name=name, transport=transport, scope=scope, **expanded)
+        return config_from_entry(name, expanded, scope)
     except Exception as error:
         logger.warning("Skipping invalid MCP server entry [{}]: {}", name, error)
         return None

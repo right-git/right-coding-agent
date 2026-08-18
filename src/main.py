@@ -448,5 +448,15 @@ async def main():
         catalog_task.cancel()
 
 
-if __name__ == "__main__":
+def cli_main() -> None:
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "mcp":
+        from src.llm.tools.mcp.cli import run_mcp_cli
+
+        raise SystemExit(run_mcp_cli(sys.argv[2:]))
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    cli_main()
