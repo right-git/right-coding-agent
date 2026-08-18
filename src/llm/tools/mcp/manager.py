@@ -19,7 +19,6 @@ old task would unregister the new generation's tools and null its live session.
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import timedelta
 from enum import Enum
 from functools import partial
 from typing import Any
@@ -360,7 +359,7 @@ class McpManager:
     async def _call_via_session(self, server: str, tool: str, arguments: dict) -> Any:
         _, session = self._session_of(server)
         return await asyncio.wait_for(
-            session.call_tool(tool, arguments, read_timeout_seconds=timedelta(seconds=settings.mcp_tool_timeout)),
+            session.call_tool(tool, arguments, read_timeout_seconds=settings.mcp_tool_timeout),
             timeout=settings.mcp_tool_timeout + TOOL_TIMEOUT_GRACE,
         )
 

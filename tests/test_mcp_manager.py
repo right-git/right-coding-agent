@@ -38,6 +38,10 @@ class FakeSession:
         self.tools, self.prompts, self.resources = list(tools), list(prompts), list(resources)
         self.fail_calls = fail_calls
         self.calls = []
+        # `read_timeout_seconds` as received by each `call_tool` invocation —
+        # kept separate from `self.calls` so existing (name, arguments)
+        # assertions elsewhere don't need reshaping.
+        self.read_timeouts = []
 
     async def initialize(self):
         return None
@@ -52,6 +56,7 @@ class FakeSession:
         return SimpleNamespace(resources=self.resources)
 
     async def call_tool(self, name, arguments, read_timeout_seconds=None):
+        self.read_timeouts.append(read_timeout_seconds)
         if self.fail_calls > 0:
             self.fail_calls -= 1
             raise ConnectionError("stream closed")
@@ -163,6 +168,26 @@ class TestManagerLifecycle(unittest.TestCase):
             await harness.manager.reconnect("srv")
             self.assertIsNotNone(harness.registry.get("mcp__srv__click"))
             self.assertEqual(harness.connections, 2)
+            await harness.manager.stop()
+
+        asyncio.run(scenario())
+
+    def test_call_tool_passes_tool_timeout_as_a_plain_float(self):
+        """SDK 2.0's `ClientSession.call_tool` wants a bare float, not a
+
+        `timedelta` — regression coverage for the live smoke-test finding
+        (mcp 1.x accepted a `timedelta`; 2.0's `read_timeout_seconds` is
+        typed `float | None` and a `timedelta` blows up inside anyio).
+        """
+        harness = ManagerHarness()
+
+        async def scenario():
+            await harness.manager.start()
+            result = await harness.manager.call_tool("srv", "click", {"x": "1"})
+            self.assertFalse(result.isError)
+            timeout = harness.session.read_timeouts[-1]
+            self.assertIsInstance(timeout, float)
+            self.assertEqual(timeout, settings.mcp_tool_timeout)
             await harness.manager.stop()
 
         asyncio.run(scenario())
