@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.config.settings import settings
 from src.llm.tools import ToolRegistry
 from src.llm.tools.mcp import manager as manager_module
+from src.llm.tools.mcp import oauth as oauth_module
 from src.llm.tools.mcp import transports
 from src.llm.tools.mcp.config import McpServerConfig
 from src.llm.tools.mcp.manager import McpManager, ServerState
@@ -288,6 +289,18 @@ class TestManagerLifecycle(unittest.TestCase):
         asyncio.run(scenario())
 
 
+class _SlowSession(FakeSession):
+    """A session whose handshake takes longer than a short connect budget."""
+
+    def __init__(self, delay, **kwargs):
+        super().__init__(**kwargs)
+        self.delay = delay
+
+    async def initialize(self):
+        await asyncio.sleep(self.delay)
+        return None
+
+
 class _FakeCallbackServer:
     """Records the interactive callback server's lifecycle."""
 
@@ -404,6 +417,27 @@ class TestNeedsAuth(unittest.TestCase):
         status = self.run_start(self.needs_auth_manager(RuntimeError("HTTP 401 Unauthorized")))
         self.assertEqual(status.state, ServerState.NEEDS_AUTH)
         self.assertIn("/mcp login remote", status.error)
+
+    def test_a_wrapped_401_still_reports_needs_auth(self):
+        # `str(ExceptionGroup(...))` is only "… (2 sub-exceptions)", so a check
+        # on the outermost exception would miss the real 401 underneath — and
+        # wrapped is the likeliest shape to arrive in under anyio.
+        wrapped = ExceptionGroup("transport failed", [RuntimeError("closed"), RuntimeError("HTTP 401 Unauthorized")])
+        self.assertEqual(self.run_start(self.needs_auth_manager(wrapped)).state, ServerState.NEEDS_AUTH)
+
+    def test_a_401_status_code_without_the_text_reports_needs_auth(self):
+        class Response:
+            status_code = 401
+
+        class HttpStatusError(RuntimeError):
+            response = Response()
+
+        status = self.run_start(self.needs_auth_manager(HttpStatusError("server refused the request")))
+        self.assertEqual(status.state, ServerState.NEEDS_AUTH)
+
+    def test_a_401_like_number_is_not_an_authorization_failure(self):
+        status = self.run_start(self.needs_auth_manager(RuntimeError("upstream request 1401 failed")))
+        self.assertEqual(status.state, ServerState.FAILED)
 
     def test_http_401_with_stored_tokens_reports_failed(self):
         # Tokens exist and the server still refuses: that is a broken server or
@@ -524,6 +558,24 @@ class TestLoginLogout(unittest.TestCase):
         build.assert_not_called()
         self.assertEqual(self.callback.started, 0)
 
+    def test_login_without_a_url_is_refused_before_binding_a_port(self):
+        # A urlless remote config would otherwise reach OAuthClientProvider,
+        # whose failure used to leak the already-bound callback socket and
+        # wedge every later login on the fixed port.
+        config = McpServerConfig(name="remote", transport="http", url="https://r/mcp")
+        manager = self.manager(config=config)
+        object.__setattr__(manager._connections["remote"].config, "url", "")
+
+        async def scenario():
+            with self.patched_build() as build:
+                with self.assertRaises(ValueError):
+                    await manager.login("remote")
+            return build
+
+        build = asyncio.run(scenario())
+        build.assert_not_called()
+        self.assertEqual(self.callback.started, 0)
+
     def test_login_on_an_unknown_server_raises(self):
         manager = self.manager()
 
@@ -551,6 +603,40 @@ class TestLoginLogout(unittest.TestCase):
                     await asyncio.gather(login, return_exceptions=True)
 
         asyncio.run(scenario())
+
+    def test_login_gets_its_own_connect_budget(self):
+        # The OAuth dance runs inside the transport's FIRST request, so it is
+        # spent inside the connect timeout. On the ordinary 30 s budget a human
+        # typing a password would be cut off — and login's `finally` would stop
+        # the callback server while the browser redirect is still in flight.
+        @asynccontextmanager
+        async def slow_factory(config, auth=None):
+            self.auths.append(auth)
+            yield _SlowSession(0.3, tools=[remote_tool()])
+
+        manager = remote_manager(factory=slow_factory)
+
+        async def scenario():
+            with patch.object(settings, "mcp_connect_timeout", 0.05):
+                with patch.object(manager_module, "LOGIN_CONNECT_TIMEOUT", 5.0):
+                    with patch.object(manager_module, "has_stored_tokens", return_value=False):
+                        await manager.start()
+                        ordinary = manager.statuses()[0].state
+                        with self.patched_build():
+                            after_login = await manager.login("remote")
+                        await manager.stop()
+            return ordinary, after_login
+
+        ordinary, after_login = asyncio.run(scenario())
+        # Same server, same delay: too slow for a background connect, fine for
+        # a login. That contrast is the whole point of the separate budget.
+        self.assertEqual(ordinary, ServerState.FAILED)
+        self.assertEqual(after_login.state, ServerState.CONNECTED)
+
+    def test_the_login_budget_covers_the_whole_callback_wait(self):
+        # Derived from CALLBACK_TIMEOUT so the two cannot drift apart.
+        self.assertGreater(manager_module.LOGIN_CONNECT_TIMEOUT, oauth_module.CALLBACK_TIMEOUT)
+        self.assertGreater(manager_module.LOGIN_CONNECT_TIMEOUT, settings.mcp_connect_timeout)
 
     def test_logout_clears_tokens_and_reconnects(self):
         manager = self.manager()

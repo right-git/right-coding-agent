@@ -2,8 +2,10 @@
 
 Single-user CLI shape: tokens live in one JSON file under `~/.right-agent/`,
 consent happens in the user's own browser, and the authorization code comes
-back to a one-shot HTTP server on 127.0.0.1. Nothing here ever raises into the
-REPL — the manager maps a failed authorization to a `NEEDS_AUTH` status.
+back to a one-shot HTTP server on 127.0.0.1. A failed authorization becomes a
+`NEEDS_AUTH` status rather than an exception; the few failures that do raise
+(a port that will not bind, a provider the SDK rejects) are caught and printed
+by `run_mcp_action`, and never reach a turn.
 
 Verified live against the installed SDK, `mcp` 2.0.0; two shapes moved since
 the 1.x-era draft this was written against:
@@ -20,13 +22,17 @@ the 1.x-era draft this was written against:
 
 The callback server binds its socket in `__init__`, not in `start()`, so
 `redirect_uri()` can report the real port before the provider's client
-metadata is built — that is what makes `port=0` usable in tests.
+metadata is built — that is what makes `port=0` usable in tests. The flip side
+is that everything after that bind must release it on the way out, since the
+production port is fixed and a leaked socket would wedge every later login.
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import queue
+import tempfile
 import threading
 import webbrowser
 from collections.abc import Callable
@@ -96,18 +102,28 @@ def _read_all(path: Path) -> dict[str, Any]:
 
 
 def _write_all(path: Path, payload: dict[str, Any]) -> None:
-    """Persist the token file, owner-readable only.
+    """Persist the token file atomically, owner-readable only.
 
-    Opened through `os.open` with mode 0o600 so a *new* file is never even
-    briefly world-readable; the explicit `chmod` afterwards fixes an existing
-    file (whose mode `O_CREAT` leaves alone) and is tolerated failing on
-    filesystems that do not implement POSIX modes.
+    Written to a sibling temp file and `os.replace`d into place: the file holds
+    EVERY server's entry, so a crash (or a full disk) partway through a plain
+    truncating write would log every server out at once. `mkstemp` creates the
+    temp with 0o600 and `O_CREAT|O_EXCL`, and `os.replace` moves that inode over
+    the old one — which is also what fixes the mode of a file that already
+    existed world-readable, something `O_CREAT` on the target never would. The
+    trailing `chmod` is belt-and-braces and tolerated failing on filesystems
+    without POSIX modes.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     text = json.dumps(payload, indent=2, sort_keys=True)
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        handle.write(text)
+    descriptor, temp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f"{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(temp_name, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temp_name)
+        raise
     try:
         os.chmod(path, 0o600)
     except OSError as error:
@@ -270,6 +286,13 @@ class CallbackServer:
         if self._closed:
             return
         self._closed = True
+        # Wake any waiter FIRST. `wait_for_auth_result` blocks in a plain
+        # `queue.get` on an executor thread, and those threads are NOT daemons:
+        # a login abandoned before the browser came back would pin one for the
+        # rest of its timeout and hang /quit in `concurrent.futures`' atexit
+        # join. Closing the socket alone never wakes it — only a queue item
+        # does. A real result already queued stays ahead of this sentinel.
+        self.server.results.put({"error": "callback server stopped"})  # type: ignore[attr-defined]
         if self._serving:
             self._serving = False
             try:
@@ -342,16 +365,24 @@ def build_oauth_provider(
             raise NeedsInteractiveAuth(hint)
         return await callback.wait_for_auth_result()
 
-    provider = OAuthClientProvider(
-        server_url=config.url or "",
-        client_metadata=OAuthClientMetadata(
-            client_name=CLIENT_NAME,
-            redirect_uris=[redirect_uri],
-            grant_types=["authorization_code", "refresh_token"],
-            response_types=["code"],
-        ),
-        storage=storage,
-        redirect_handler=redirect_handler,
-        callback_handler=callback_handler,
-    )
+    try:
+        provider = OAuthClientProvider(
+            server_url=config.url or "",
+            client_metadata=OAuthClientMetadata(
+                client_name=CLIENT_NAME,
+                redirect_uris=[redirect_uri],
+                grant_types=["authorization_code", "refresh_token"],
+                response_types=["code"],
+            ),
+            storage=storage,
+            redirect_handler=redirect_handler,
+            callback_handler=callback_handler,
+        )
+    except BaseException:
+        # The callback server already bound the port in its constructor. Leaking
+        # that socket would wedge every later login this session, because the
+        # port is fixed and a fresh bind would fail.
+        if callback is not None:
+            callback.stop()
+        raise
     return provider, callback

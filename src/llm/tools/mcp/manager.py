@@ -17,6 +17,7 @@ old task would unregister the new generation's tools and null its live session.
 """
 
 import asyncio
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -30,7 +31,7 @@ from ..meta.defaults import get_registry
 from ..meta.registry import MCP_SOURCE_PREFIX, ToolRegistry
 from .adapter import build_mcp_tool, build_prompt_command
 from .config import McpServerConfig, load_mcp_servers
-from .oauth import NeedsInteractiveAuth, build_oauth_provider, clear_tokens, has_stored_tokens
+from .oauth import CALLBACK_TIMEOUT, NeedsInteractiveAuth, build_oauth_provider, clear_tokens, has_stored_tokens
 from .transports import default_session_factory
 
 # A stopping connection gets this long to unwind its contexts before it is
@@ -44,6 +45,18 @@ TOOL_TIMEOUT_GRACE = 5.0
 # hangs on context *exit* would otherwise never release the waiter, and a hung
 # `start()` is a hung REPL startup.
 CONNECT_GRACE = 10.0
+# Room for the ordinary handshake on either side of the human's consent.
+LOGIN_CONNECT_GRACE = 30.0
+# An interactive login's own connect budget. The OAuth dance runs lazily inside
+# the transport's FIRST request — so it happens inside the connect timeout, and
+# the ordinary 30 s one would abort while the user is still typing a password
+# (reporting "connection setup timed out", and stopping the callback server out
+# from under the browser's pending redirect). Derived from the callback wait so
+# the two can never drift apart.
+LOGIN_CONNECT_TIMEOUT = CALLBACK_TIMEOUT + LOGIN_CONNECT_GRACE
+
+# Word-bounded so "1401" in an unrelated identifier is not read as a 401.
+_UNAUTHORIZED_RE = re.compile(r"\b401\b")
 
 
 class ServerState(str, Enum):
@@ -105,22 +118,47 @@ def _read_field(value: Any, name: str, default=None):
     return getattr(value, name, default)
 
 
-def _carries(error: BaseException | None, wanted: type[BaseException], depth: int = 8) -> bool:
-    """True when `error` is, wraps, or was caused by a `wanted` exception.
+def _walk(error: BaseException | None, depth: int = 8):
+    """Yield `error` and every exception it wraps or was caused by.
 
-    An exception raised inside an OAuth handler surfaces several layers away:
-    anyio task groups re-raise as `ExceptionGroup`, and httpx/the SDK re-raise
-    with the original attached as `__cause__`/`__context__`. A plain isinstance
-    check on the outermost object would miss all of those and report FAILED
-    where the user needs to be told to log in.
+    A failure raised deep in a transport surfaces several layers away: anyio
+    task groups re-raise as `ExceptionGroup`, and httpx/the SDK re-raise with
+    the original attached as `__cause__`/`__context__`. Anything that inspects
+    only the outermost object is inspecting the wrapper, not the failure.
     """
     if error is None or depth <= 0:
-        return False
-    if isinstance(error, wanted):
-        return True
+        return
+    yield error
     nested = list(getattr(error, "exceptions", ()) or ())
     nested += [error.__cause__, error.__context__]
-    return any(_carries(item, wanted, depth - 1) for item in nested)
+    for item in nested:
+        yield from _walk(item, depth - 1)
+
+
+def _carries(error: BaseException | None, wanted: type[BaseException]) -> bool:
+    """True when `error` is, wraps, or was caused by a `wanted` exception."""
+    return any(isinstance(item, wanted) for item in _walk(error))
+
+
+def _carries_unauthorized(error: BaseException | None) -> bool:
+    """True when anything in the chain is an HTTP 401.
+
+    Both shapes are checked because both occur: httpx-style errors carry a
+    `response.status_code`, while transports that stringify the status leave
+    only text. The text match is word-bounded so a "1401" in some unrelated id
+    cannot masquerade as an authorization failure — and it runs per wrapped
+    exception, since `str(ExceptionGroup(...))` is only "… (2 sub-exceptions)"
+    and would hide the real 401 underneath it.
+    """
+    for item in _walk(error):
+        status = getattr(getattr(item, "response", None), "status_code", None)
+        if status is None:
+            status = getattr(item, "status_code", None)
+        if status == 401:
+            return True
+        if _UNAUTHORIZED_RE.search(str(item)):
+            return True
+    return False
 
 
 class McpManager:
@@ -212,7 +250,7 @@ class McpManager:
         """
         if _carries(error, NeedsInteractiveAuth):
             return ServerState.NEEDS_AUTH
-        if config.transport in ("http", "sse") and "401" in str(error):
+        if config.transport in ("http", "sse") and _carries_unauthorized(error):
             try:
                 if not has_stored_tokens(config.name, config.url or ""):
                     return ServerState.NEEDS_AUTH
@@ -293,16 +331,26 @@ class McpManager:
         """
         return conn.task is asyncio.current_task()
 
-    async def _run_connection(self, conn: _Connection, ready: asyncio.Event, stop_event: asyncio.Event) -> None:
+    async def _run_connection(
+        self,
+        conn: _Connection,
+        ready: asyncio.Event,
+        stop_event: asyncio.Event,
+        connect_timeout: float | None = None,
+    ) -> None:
         """The owning task: enters, serves, and unwinds one session.
 
         `ready`/`stop_event` are passed in rather than read off `conn`, so a
-        late-unwinding task can never signal a newer generation's events.
+        late-unwinding task can never signal a newer generation's events, and
+        `connect_timeout` likewise: an interactive login needs a far longer
+        budget than a background reconnect, and reading it off shared state
+        would leak that budget into whatever connects next.
         """
+        timeout = settings.mcp_connect_timeout if connect_timeout is None else connect_timeout
         try:
             async with self._session_factory(conn.config, self._auth_for(conn.config)) as session:
-                await asyncio.wait_for(session.initialize(), timeout=settings.mcp_connect_timeout)
-                await asyncio.wait_for(self._load_inventory(conn, session), timeout=settings.mcp_connect_timeout)
+                await asyncio.wait_for(session.initialize(), timeout=timeout)
+                await asyncio.wait_for(self._load_inventory(conn, session), timeout=timeout)
                 if not self._owns(conn):
                     logger.warning("MCP server [{}] connected into a stale generation; unwinding", conn.config.name)
                     return
@@ -326,21 +374,22 @@ class McpManager:
                     self._set_state(conn, ServerState.DISCONNECTED)
             ready.set()
 
-    async def _connect(self, conn: _Connection) -> None:
+    async def _connect(self, conn: _Connection, connect_timeout: float | None = None) -> None:
         if self._stopping:
             return
         if conn.task is not None and not conn.task.done():
             return
+        timeout = settings.mcp_connect_timeout if connect_timeout is None else connect_timeout
         ready = conn.ready = asyncio.Event()
         stop_event = conn.stop_event = asyncio.Event()
         conn.generation += 1
         self._set_state(conn, ServerState.CONNECTING)
         conn.task = asyncio.create_task(
-            self._run_connection(conn, ready, stop_event),
+            self._run_connection(conn, ready, stop_event, timeout),
             name=f"mcp:{conn.config.name}",
         )
         try:
-            await asyncio.wait_for(ready.wait(), timeout=settings.mcp_connect_timeout + CONNECT_GRACE)
+            await asyncio.wait_for(ready.wait(), timeout=timeout + CONNECT_GRACE)
         except asyncio.TimeoutError:
             # The task stays `conn.task` so stop()/reconnect can still cancel
             # it; it keeps unwinding in the background meanwhile.
@@ -422,23 +471,28 @@ class McpManager:
         down while the user is on the consent screen. The SDK runs the actual
         OAuth flow lazily, during the transport's first request — which is why
         the provider has to be stashed for `_auth_for` (`override_auth`) rather
-        than passed down, and why the callback server must outlive `_connect`
-        and be stopped only in the `finally`.
+        than passed down, why the connect runs on `LOGIN_CONNECT_TIMEOUT`
+        rather than the ordinary one, and why the callback server must outlive
+        `_connect` and be stopped only in the `finally`.
         """
         conn = self._require(name)
         config = conn.config
         if config.transport not in ("http", "sse"):
             raise ValueError(f"MCP server '{name}' is a {config.transport} server; OAuth applies to http/sse servers")
+        if not config.url:
+            raise ValueError(f"MCP server '{name}' has no url to authorize against")
         async with self._lock_of(conn):
             # Built before the disconnect: a callback port that cannot bind
             # must not cost the user a working connection.
             provider, callback = build_oauth_provider(config, interactive=True)
-            if callback is not None:
-                callback.start()
             try:
+                # Inside the try: a failed start still owns a bound socket, and
+                # the fixed port would wedge every later login this session.
+                if callback is not None:
+                    callback.start()
                 await self._disconnect(conn)
                 conn.override_auth = provider
-                await self._connect(conn)
+                await self._connect(conn, connect_timeout=LOGIN_CONNECT_TIMEOUT)
             finally:
                 # One-shot: a connect that never consumed it (a timeout, say)
                 # must not authorize some later reconnect behind the user.

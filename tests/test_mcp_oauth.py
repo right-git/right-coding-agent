@@ -4,14 +4,18 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from mcp.shared.auth import AuthorizationCodeResult, OAuthClientInformationFull, OAuthToken
 
+from src.llm.tools.mcp import oauth as oauth_module
 from src.llm.tools.mcp.config import McpServerConfig
 from src.llm.tools.mcp.oauth import (
     CallbackServer,
@@ -106,6 +110,40 @@ class TestFileTokenStorage(unittest.TestCase):
         mode = os.stat(self.path).st_mode & 0o777
         self.assertEqual(mode, 0o600)
 
+    @unittest.skipIf(sys.platform == "win32", "POSIX file modes only")
+    def test_a_world_readable_file_is_tightened_on_write(self):
+        # A file written by an older build (or a stray editor) must not stay
+        # readable by every account on the machine just because it pre-existed.
+        self.path.write_text("{}", encoding="utf-8")
+        os.chmod(self.path, 0o644)
+        asyncio.run(self.storage().set_tokens(OAuthToken(access_token="t", token_type="Bearer")))
+        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o600)
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX file modes only")
+    def test_the_agent_home_directory_is_owner_only(self):
+        nested = Path(self.tmp.name) / "fresh-home" / "mcp-tokens.json"
+        storage = FileTokenStorage("srv", "https://s/mcp", path=nested)
+        asyncio.run(storage.set_tokens(OAuthToken(access_token="t", token_type="Bearer")))
+        self.assertEqual(os.stat(nested.parent).st_mode & 0o777, 0o700)
+
+    def test_writes_are_atomic_and_leave_no_residue(self):
+        storage = self.storage()
+        asyncio.run(storage.set_tokens(OAuthToken(access_token="t1", token_type="Bearer")))
+        asyncio.run(storage.set_tokens(OAuthToken(access_token="t2", token_type="Bearer")))
+        siblings = [item.name for item in self.path.parent.iterdir()]
+        self.assertEqual(siblings, [self.path.name])
+        self.assertEqual(asyncio.run(storage.get_tokens()).access_token, "t2")
+
+    def test_a_failed_write_leaves_the_previous_file_intact(self):
+        # The file holds every server's entry, so a half-written save would log
+        # them all out; the replace-based write can only succeed or do nothing.
+        asyncio.run(self.storage().set_tokens(OAuthToken(access_token="keep", token_type="Bearer")))
+        with mock.patch("src.llm.tools.mcp.oauth.os.replace", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                asyncio.run(self.storage().set_tokens(OAuthToken(access_token="lost", token_type="Bearer")))
+        self.assertEqual(asyncio.run(self.storage().get_tokens()).access_token, "keep")
+        self.assertEqual([item.name for item in self.path.parent.iterdir()], [self.path.name])
+
     def test_helpers(self):
         self.assertFalse(has_stored_tokens("srv", "https://s/mcp", path=self.path))
         asyncio.run(self.storage().set_tokens(OAuthToken(access_token="t", token_type="Bearer")))
@@ -198,6 +236,52 @@ class TestCallbackServer(unittest.TestCase):
         status, body = asyncio.run(scenario())
         self.assertEqual(status, 200)
         self.assertIn("close this tab", body.lower())
+
+    def test_stop_wakes_an_abandoned_waiter_immediately(self):
+        # `wait_for_auth_result` blocks in a plain `queue.get` on a NON-daemon
+        # executor thread. If `stop()` only closed the socket, that thread
+        # would stay parked for the rest of the timeout and hang /quit in
+        # `concurrent.futures`' atexit join.
+        server = CallbackServer(port=0)
+        server.start()
+
+        async def scenario():
+            waiter = asyncio.create_task(server.wait_for_auth_result(timeout=300))
+            await asyncio.sleep(0.05)
+            started = time.monotonic()
+            server.stop()
+            with self.assertRaises(RuntimeError):
+                await asyncio.wait_for(waiter, timeout=5)
+            return time.monotonic() - started
+
+        self.assertLess(asyncio.run(scenario()), 2.0)
+
+    def test_stop_leaves_no_executor_thread_behind(self):
+        server = CallbackServer(port=0)
+        server.start()
+
+        async def scenario():
+            waiter = asyncio.create_task(server.wait_for_auth_result(timeout=300))
+            await asyncio.sleep(0.05)
+            server.stop()
+            with contextlib.suppress(RuntimeError):
+                await asyncio.wait_for(waiter, timeout=5)
+
+        asyncio.run(scenario())
+        # asyncio.run() only returns after shutting its executor down, which it
+        # can only do once the queue.get thread has actually returned.
+        self.assertFalse(any(t.name.startswith("mcp-oauth-callback") and t.is_alive() for t in threading.enumerate()))
+
+    def test_a_real_result_still_wins_over_the_stop_sentinel(self):
+        server = self.make_server()
+
+        async def scenario():
+            await asyncio.to_thread(urllib.request.urlopen, server.redirect_uri() + "?code=real&state=s")
+            server.stop()
+            return await server.wait_for_code(timeout=5)
+
+        code, _ = asyncio.run(scenario())
+        self.assertEqual(code, "real")
 
     def test_timeout_raises_without_a_callback(self):
         server = self.make_server()
@@ -308,6 +392,28 @@ class TestBuildOAuthProvider(unittest.TestCase):
         # The user can still paste the URL by hand, so a dead browser must not
         # abort the flow before the callback server ever gets a chance.
         asyncio.run(provider.context.redirect_handler("https://as.example/authorize"))
+
+    def test_a_failed_provider_build_closes_the_callback_socket(self):
+        # The callback binds in its constructor, before the provider is built.
+        # Leaking that socket would wedge every later login this session, since
+        # the production port is fixed.
+        created = []
+        real_server = oauth_module.CallbackServer
+
+        def spy(port):
+            server = real_server(port)
+            created.append(server)
+            return server
+
+        with mock.patch.object(oauth_module, "CallbackServer", spy):
+            with mock.patch.object(oauth_module, "OAuthClientProvider", side_effect=RuntimeError("bad metadata")):
+                with self.assertRaises(RuntimeError):
+                    build_oauth_provider(self.config, interactive=True, storage=self.storage(), port=0)
+
+        self.assertEqual(len(created), 1)
+        reused = CallbackServer(port=created[0].port)
+        self.addCleanup(reused.stop)
+        self.assertEqual(reused.port, created[0].port)
 
     def test_storage_defaults_to_the_shared_token_file(self):
         provider, _ = build_oauth_provider(self.config, interactive=False)
