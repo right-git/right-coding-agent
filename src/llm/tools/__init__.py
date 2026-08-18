@@ -21,6 +21,8 @@ from .computer.tool import (
     warm_up_computer,
 )
 from .files.tool import FILE_TOOLS, edit_file, glob_files, grep_files, read_file, write_file
+from .mcp.manager import get_mcp_manager, set_mcp_manager
+from .mcp.tool import MCP_SERVICE_TOOLS, mcp_list_resources, mcp_read_resource
 from .meta.attachments import attach_image, collecting_images
 from .meta.defaults import default_tools, get_registry, set_registry
 from .meta.registry import RESERVED_SCRIPT_NAMES, ToolRegistry
@@ -40,6 +42,7 @@ __all__ = [
     "FILE_TOOLS",
     "MAX_ATTACHED_IMAGES",
     "MAX_RESULT_CHARS",
+    "MCP_SERVICE_TOOLS",
     "META_TOOLS",
     "RESERVED_SCRIPT_NAMES",
     "ToolRegistry",
@@ -49,14 +52,18 @@ __all__ = [
     "default_tools",
     "edit_file",
     "get_computer",
+    "get_mcp_manager",
     "get_registry",
     "get_tool",
     "glob_files",
     "grep_files",
+    "mcp_list_resources",
+    "mcp_read_resource",
     "read_file",
     "run_tools",
     "search_tools",
     "set_computer",
+    "set_mcp_manager",
     "set_registry",
     "warm_up_computer",
     "web_fetch",
