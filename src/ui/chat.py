@@ -48,6 +48,7 @@ class ChatUI:
         self.reasoning_effort: str | None = None
         self.temperature: float | None = None
         self.pending_images: list[dict] = []
+        self.pinned_tools: list[str] = []
         self.sound_enabled = True
         self.voice = None  # VoiceController once /voice enables it
         self.model_status: dict[str, tuple[str, float, str | None]] = {}  # name → (state, since, detail)
@@ -183,6 +184,7 @@ class ChatUI:
 
     def take_user_content(self, text: str) -> str | list[dict]:
         """The next message's content: plain text, or text plus queued images."""
+        text = self._apply_tool_pins(text)
         if not self.pending_images:
             return text
         blocks: list[dict] = []
@@ -197,6 +199,22 @@ class ChatUI:
             )
         self.pending_images.clear()
         return blocks
+
+    def _apply_tool_pins(self, text: str) -> str:
+        """Append pinned tools' contracts to the outgoing message, consuming the pins."""
+        if not self.pinned_tools:
+            return text
+        from src.llm.tools import get_registry
+
+        registry = get_registry()
+        contracts = [registry.document(name) for name in self.pinned_tools]
+        self.pinned_tools = []
+        blocks = "\n\n---\n\n".join(c for c in contracts if c)
+        if not blocks:
+            return text
+        from src.ui.commands import TOOL_DIRECTIVE_HEADER
+
+        return f"{text}\n\n{TOOL_DIRECTIVE_HEADER}\n\n{blocks}"
 
     def settings_line(self) -> str:
         """`effort high · temperature default (1.0)` for the session settings.

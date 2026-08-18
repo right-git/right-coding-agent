@@ -25,6 +25,10 @@ CLEAR_WORDS = ("none", "off", "default")
 MAX_LISTED_MATCHES = 8
 MAX_SEARCH_RESULTS = 15
 MCP_SUBCOMMANDS = ("reconnect", "login", "logout")
+TOOL_DIRECTIVE_HEADER = (
+    "[Tool directive: use the tool(s) below for this request — the user "
+    "picked them explicitly. Contracts follow; no need for search_tools/get_tool.]"
+)
 # Literal style specs, not the app theme's "info"/"success"/"error" aliases:
 # `run_mcp_action` is called with a plain console in tests (and could be
 # handed any console), and a literal spec renders identically wherever the
@@ -665,6 +669,50 @@ class CommandHandler:
     # ------------------------------------------------------------- tool pin
 
     def _tool_pin(self, argument: str) -> None:
-        """`/tool <name>`: stub — Task 13 implements pinning a tool's contract."""
-        self.console.print("  /tool: pinning a tool for the next message is coming in a later task", style=MCP_INFO)
+        """`/tool [name|none]`: pin a registry tool's full contract onto the
+        next outgoing message (`ChatUI._apply_tool_pins` does the appending
+        and consumes the pin), so the model can skip search_tools/get_tool
+        discovery for it. With no argument, shows what is currently pinned;
+        `none`/`off`/`default` clears the pins. An unknown name is matched by
+        substring — a single match pins it, several are listed as candidates
+        rather than guessed. Tool names may come from an MCP server, so
+        dynamic text here is printed with markup disabled."""
+        from src.llm.tools import get_registry
+
+        registry = get_registry()
+        if not argument:
+            pinned = ", ".join(self.ui.pinned_tools) or "nothing"
+            self.console.print(
+                f"  pinned for the next message: {pinned} (/tool <name>, /tool none)",
+                style="info",
+                markup=False,
+                highlight=False,
+            )
+            return None
+        if argument.lower() in CLEAR_WORDS:
+            self.ui.pinned_tools.clear()
+            self.console.print("  tool pins cleared", style="success")
+            return None
+        name = argument.strip()
+        if registry.get(name) is None:
+            matches = [t.name for t in registry.all_tools() if name.lower() in t.name.lower()]
+            if len(matches) == 1:
+                name = matches[0]
+            else:
+                listed = ", ".join(matches[:MAX_LISTED_MATCHES]) or "no similar names"
+                self.console.print(
+                    f"  unknown tool: {name} — {listed}",
+                    style="error",
+                    markup=False,
+                    highlight=False,
+                )
+                return None
+        if name not in self.ui.pinned_tools:
+            self.ui.pinned_tools.append(name)
+        self.console.print(
+            f"  pinned {name} — its contract goes with your next message",
+            style="success",
+            markup=False,
+            highlight=False,
+        )
         return None

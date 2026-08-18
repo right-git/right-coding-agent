@@ -4,8 +4,8 @@ Wired into the prompt session with `complete_while_typing`, so suggestions
 appear as the user types: command names after `/`, model ids for `/model`
 and `/models` (tool-capable catalog entries plus the curated list, `:batch`
 variants excluded — the same pool `/model` accepts), effort levels for
-`/effort` and the `/model <id> <effort>` suffix, and log levels for
-`/log-level`.
+`/effort` and the `/model <id> <effort>` suffix, log levels for
+`/log-level`, and registry tool names (built-in and MCP) for `/tool`.
 """
 
 from prompt_toolkit.completion import Completer, Completion
@@ -26,6 +26,7 @@ COMMANDS: dict[str, str] = {
     "/check": "check & request macOS permissions",
     "/log-level": "show or change log level",
     "/mcp": "MCP servers: status / reconnect / login / logout",
+    "/tool": "pin a tool for the next message",
     "/clear": "clear screen and history",
     "/quit": "exit",
 }
@@ -85,6 +86,9 @@ class CommandCompleter(Completer):
                 return
             yield from self._option_completions(word, tuple(self._mcp_server_names()))
             return
+        if command == "/tool":
+            yield from self._tool_name_completions(word)
+            return
 
     def _model_completions(self, word: str):
         matched, _ = self.ui.commands.catalog_matches(word)
@@ -124,3 +128,16 @@ class CommandCompleter(Completer):
             return [status.name for status in get_mcp_manager().statuses()]
         except Exception:
             return []
+
+    @staticmethod
+    def _tool_name_completions(word: str):
+        try:
+            from src.llm.tools import get_registry
+
+            registry = get_registry()
+        except Exception:
+            return
+        needle = word.lower()
+        for tool_obj in registry.all_tools():
+            if needle in tool_obj.name.lower():
+                yield Completion(tool_obj.name, start_position=-len(word))
