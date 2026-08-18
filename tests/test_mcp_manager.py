@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.config.settings import settings
 from src.llm.tools import ToolRegistry
 from src.llm.tools.mcp import manager as manager_module
+from src.llm.tools.mcp import transports
 from src.llm.tools.mcp.config import McpServerConfig
 from src.llm.tools.mcp.manager import McpManager, ServerState
 
@@ -260,6 +261,98 @@ class TestManagerLifecycle(unittest.TestCase):
             await harness.manager.stop()
 
         asyncio.run(scenario())
+
+
+class _FakeStreams:
+    """Stand-in for a transport's yielded (read, write[, ...]) tuple."""
+
+    def __init__(self, count):
+        self.count = count
+
+    async def __aenter__(self):
+        return tuple(object() for _ in range(self.count))
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _FakeHttpClient:
+    """Stand-in for the `httpx2.AsyncClient` `create_mcp_http_client` returns.
+
+    Only the async-context-manager surface matters: `default_session_factory`
+    opens and closes this client itself around the http transport.
+    """
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class TestDefaultSessionFactory(unittest.TestCase):
+    """Transport selection only — no real process or network I/O.
+
+    Every SDK entry point (`stdio_client`, `create_mcp_http_client`,
+    `streamable_http_client`, `sse_client`, `ClientSession`) is patched in
+    the `transports` module namespace.
+    """
+
+    def run_factory(self, config, auth=None):
+        async def scenario():
+            async with transports.default_session_factory(config, auth=auth) as session:
+                self.assertIsNotNone(session)
+
+        with patch.object(transports, "ClientSession") as session_cls:
+            session_cls.return_value.__aenter__ = lambda s: asyncio.sleep(0, result=object())
+            session_cls.return_value.__aexit__ = lambda s, *e: asyncio.sleep(0, result=False)
+            asyncio.run(scenario())
+
+    def test_stdio_builds_server_params_merged_over_default_environment(self):
+        config = McpServerConfig(name="pw", command="npx", args=["-y", "x"], env={"A": "1"})
+        with patch.object(transports, "stdio_client", return_value=_FakeStreams(2)) as client:
+            self.run_factory(config)
+        params = client.call_args.args[0]
+        self.assertEqual(params.command, "npx")
+        self.assertEqual(params.args, ["-y", "x"])
+        self.assertEqual(params.env.get("A"), "1")
+        # Merged over the real default environment, not replacing it.
+        self.assertIn("PATH", params.env)
+
+    def test_http_builds_httpx_client_with_headers_and_auth_and_passes_it_through(self):
+        config = McpServerConfig(name="c", transport="http", url="https://c/mcp", headers={"K": "V"})
+        fake_client = _FakeHttpClient()
+        sentinel_auth = object()
+        with (
+            patch.object(transports, "create_mcp_http_client", return_value=fake_client) as make_client,
+            patch.object(transports, "streamable_http_client", return_value=_FakeStreams(2)) as client,
+        ):
+            self.run_factory(config, auth=sentinel_auth)
+        make_client.assert_called_once_with(headers={"K": "V"}, auth=sentinel_auth)
+        self.assertEqual(client.call_args.args[0], "https://c/mcp")
+        self.assertIs(client.call_args.kwargs["http_client"], fake_client)
+
+    def test_sse_selected_for_sse_transport_with_headers_and_auth(self):
+        config = McpServerConfig(name="l", transport="sse", url="https://l/sse", headers={"K": "V"})
+        sentinel_auth = object()
+        with patch.object(transports, "sse_client", return_value=_FakeStreams(2)) as client:
+            self.run_factory(config, auth=sentinel_auth)
+        self.assertEqual(client.call_args.args[0], "https://l/sse")
+        self.assertEqual(client.call_args.kwargs["headers"], {"K": "V"})
+        self.assertIs(client.call_args.kwargs["auth"], sentinel_auth)
+
+    def test_unsupported_transport_raises(self):
+        # A plain object stands in here: McpServerConfig's own Literal type
+        # already forbids constructing a bogus `transport`, so this exercises
+        # the factory's own fallback branch in isolation.
+        config = SimpleNamespace(transport="carrier-pigeon")
+
+        async def scenario():
+            async with transports.default_session_factory(config):
+                pass  # pragma: no cover - never reached
+
+        with self.assertRaises(ValueError):
+            asyncio.run(scenario())
 
 
 if __name__ == "__main__":

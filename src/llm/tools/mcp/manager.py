@@ -18,7 +18,6 @@ old task would unregister the new generation's tools and null its live session.
 
 import asyncio
 from collections.abc import Callable
-from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum
@@ -32,6 +31,7 @@ from ..meta.defaults import get_registry
 from ..meta.registry import MCP_SOURCE_PREFIX, ToolRegistry
 from .adapter import build_mcp_tool, build_prompt_command
 from .config import McpServerConfig, load_mcp_servers
+from .transports import default_session_factory
 
 # A stopping connection gets this long to unwind its contexts before it is
 # cancelled outright — a wedged stdio child must never hold up REPL exit.
@@ -86,17 +86,6 @@ class _Connection:
     lock: asyncio.Lock | None = None
 
 
-@asynccontextmanager
-async def _unavailable_session_factory(config: McpServerConfig, auth: Any | None = None):
-    """Placeholder default until the real transports module lands.
-
-    Raising here (rather than at import time) keeps `import manager` working
-    everywhere; tests inject their own factory.
-    """
-    raise RuntimeError("no session factory configured — MCP transports are not wired up yet")
-    yield None  # pragma: no cover - unreachable; keeps this an async generator
-
-
 def _first_sentence(text: str) -> str:
     """First sentence of a description, whitespace-normalized."""
     normalized = " ".join((text or "").split())
@@ -122,7 +111,7 @@ class McpManager:
         on_status: Callable[[str, ServerState], None] | None = None,
     ) -> None:
         self._configs = dict(configs) if configs is not None else load_mcp_servers()
-        self._session_factory = session_factory or _unavailable_session_factory
+        self._session_factory = session_factory or default_session_factory
         self._registry = registry
         # Public: the REPL assigns its status reporter after construction.
         self.on_status = on_status
