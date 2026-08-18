@@ -78,6 +78,81 @@ class TurnStreamTests(unittest.TestCase):
 
         self.assertEqual(stream._text, "hello world")
 
+    def test_streamed_text_ends_the_thinking_phase(self):
+        ui = make_ui()
+        stream = TurnStream(ui)
+
+        stream.on_token("The ")
+        stream.on_token("answer")
+
+        self.assertEqual(stream.ticker.label, "responding")
+        self.assertIn("thought for", ui.console.export_text())
+
+    def test_thought_is_announced_once_when_text_precedes_tool_calls(self):
+        ui = make_ui()
+        stream = TurnStream(ui)
+
+        stream.on_token("let me look")
+        stream.on_message(tool_call_message())
+
+        self.assertEqual(ui.console.export_text().count("thought for"), 1)
+        self.assertEqual(stream.ticker.label, "running tools")
+
+    def test_thought_is_announced_once_when_text_precedes_the_answer(self):
+        ui = make_ui()
+        stream = TurnStream(ui)
+
+        stream.on_token("the ")
+        stream.on_message(AIMessage(content="the answer", id="ai-2"))
+
+        self.assertEqual(ui.console.export_text().count("thought for"), 1)
+        self.assertEqual(stream.ticker.label, "finishing")
+
+    def test_thinking_resumes_after_a_tool_round(self):
+        ui = make_ui()
+        stream = TurnStream(ui)
+
+        stream.on_token("checking")
+        stream.on_message(tool_call_message())
+        stream.on_message(ToolMessage(content="ok", tool_call_id="c1", id="tool-3"))
+        self.assertEqual(stream.ticker.label, "thinking")
+        stream.on_token("done")
+        self.assertEqual(stream.ticker.label, "responding")
+
+    def test_streamed_answer_is_shown_in_full_while_responding(self):
+        ui = make_ui()
+        stream = TurnStream(ui)
+
+        for index in range(12):
+            stream.on_token(f"line {index}\n")
+        ui.console.print(stream)
+
+        rendered = ui.console.export_text()
+        for index in range(12):
+            self.assertIn(f"line {index}", rendered)
+
+    def test_long_streamed_lines_wrap_instead_of_being_cut(self):
+        ui = make_ui()
+        stream = TurnStream(ui)
+
+        stream.on_token("x" * 260 + "END")
+        ui.console.print(stream)
+
+        self.assertIn("END", ui.console.export_text())
+
+    def test_streamed_text_is_cropped_to_the_available_height_newest_first(self):
+        ui = make_ui()
+        ui.console.height = 8
+        stream = TurnStream(ui)
+
+        for index in range(30):
+            stream.on_token(f"line {index}\n")
+        ui.console.print(stream)
+
+        rendered = ui.console.export_text()
+        self.assertIn("line 29", rendered)
+        self.assertNotIn("line 0\n", rendered)
+
     def test_human_messages_are_ignored(self):
         ui = make_ui()
         stream = TurnStream(ui)
@@ -86,6 +161,18 @@ class TurnStreamTests(unittest.TestCase):
 
         self.assertEqual(stream.printed_ids, set())
         self.assertNotIn("attached", ui.console.export_text())
+
+
+class AnswerPanelTests(unittest.TestCase):
+    def test_answer_panel_keeps_top_and_bottom_rules_without_side_borders(self):
+        ui = make_ui()
+
+        ui.print_response([AIMessage(content="final answer", id="ai-2")])
+
+        rendered = ui.console.export_text()
+        self.assertIn("final answer", rendered)
+        self.assertIn("\u2500", rendered)
+        self.assertNotIn("\u2502", rendered)
 
 
 class PrintResponseSkipTests(unittest.TestCase):

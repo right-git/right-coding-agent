@@ -3,9 +3,12 @@
 `ChatUI.turn_stream()` opens one rich Live region pinned to the bottom of
 the terminal and yields a `TurnStream`. The LLM layer drives it with two
 callbacks while the turn runs: `on_token` accumulates the model's streamed
-text (a tail of it is shown live), `on_message` prints tool calls and tool
-results the moment they happen — plus a dim "thought for Ns" line before
-each action, so the wait is always attributed. Regular console prints
+text and shows it in full while it is written (only the terminal's height
+crops it), `on_message` prints tool calls and tool results the moment they
+happen — plus a dim "thought for Ns" line before each action, so the wait is
+always attributed. The first streamed token ends the "thinking" phase and
+flips the label to "responding": tokens are answer text by construction,
+never reasoning. Regular console prints
 surface above the live region, so finished lines scroll away naturally
 while the ticker stays pinned.
 """
@@ -19,7 +22,8 @@ from src.config.logging import logger
 from src.llm.utils import format_duration
 
 TICKER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-TEXT_TAIL_LINES = 6
+TEXT_INDENT = "  "
+TEXT_MIN_WIDTH = 20
 
 
 class TurnTicker:
@@ -55,9 +59,16 @@ class TurnStream:
         self._text = ""
 
     def __rich_console__(self, console, options):
+        # The answer is shown as it streams, wrapped and undimmed — it is the
+        # result, not a peek at one. Only the terminal's own height limits it:
+        # the newest lines win, so the text being written is always on screen.
         if self._text:
-            for line in self._text.strip().splitlines()[-TEXT_TAIL_LINES:]:
-                yield Text(f"  {line}", style="info", overflow="ellipsis", no_wrap=True)
+            height = getattr(options, "max_height", None) or console.size.height
+            budget = max(1, height - 2)  # leave room for the ticker line
+            width = max(TEXT_MIN_WIDTH, options.max_width - len(TEXT_INDENT))
+            wrapped = Text(self._text.strip()).wrap(console, width, overflow="fold")
+            for line in wrapped[-budget:]:
+                yield Text(TEXT_INDENT).append_text(line)
         frame = TICKER_FRAMES[int(time.monotonic() * 10) % len(TICKER_FRAMES)]
         yield Text(
             f"  {frame} {self.ticker.label}… {format_duration(self.ticker.elapsed)}",
@@ -69,6 +80,16 @@ class TurnStream:
 
     def on_token(self, piece: str) -> None:
         try:
+            if not piece:
+                return
+            # Only answer text reaches this callback — reasoning arrives as
+            # `reasoning` content blocks, which `AIMessageChunk.text` drops.
+            # So the first token means thinking is over and the model is
+            # writing; without this the ticker kept saying "thinking" while
+            # the answer itself scrolled past, reading as reasoning.
+            self._announce_thought()
+            if self.ticker.label == "thinking":
+                self.ticker.reset("responding")
             self._text += piece
         except Exception:
             logger.exception("Failed to buffer streamed text")
@@ -106,7 +127,8 @@ class TurnStream:
             self._text = ""
             self.ticker.reset("running tools")
         else:
-            # The final answer: announce the thinking time and let the turn
+            # The final answer: announce the thinking time (a no-op once the
+            # streamed text already ended the thinking phase) and let the turn
             # loop print the text itself once the response is complete.
             self._announce_thought()
             self.ticker.reset("finishing")

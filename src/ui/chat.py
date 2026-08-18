@@ -453,6 +453,7 @@ class ChatUI:
                     self.console.print(
                         Panel(
                             md,
+                            box=box.HORIZONTALS,  # rules above and below, no side bars to fight
                             border_style="magenta",
                             padding=(0, 1),
                         )
