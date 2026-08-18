@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import ast
 import asyncio
-import textwrap
 from typing import Any, Callable, Awaitable
 
 from .builtins import make_builtins
@@ -32,6 +31,7 @@ from .limits import (
     MEM_CHECK_EVERY,
 )
 from .policy import ALLOWED_NODES, SAFE_METHODS
+from .source import wrap_as_function
 
 
 class _ReturnSignal(Exception):
@@ -67,10 +67,10 @@ class Interpreter:
         self.total_sleep = 0.0
         self.logs = []
 
-        # Normalize tabs, indentation and wrap in a function so top-level `return` is valid
-        clean_code = textwrap.dedent(code.expandtabs(4)).strip()
-        indented = "\n".join("    " + line if line.strip() else "" for line in clean_code.splitlines())
-        wrapped = f"def __sandbox_main__():\n{indented}\n"
+        # Wrapped in a function so a top-level `return` is valid; the wrapping
+        # is token-aware so re-indenting the script cannot reach inside its
+        # string literals (see source.py — that is how file bodies travel).
+        wrapped = wrap_as_function(code, "__sandbox_main__")
         try:
             outer = ast.parse(wrapped, mode="exec")
             tree = outer.body[0]  # FunctionDef; we interpret its .body

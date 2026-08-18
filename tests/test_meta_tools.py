@@ -160,6 +160,27 @@ class ScriptCallableTests(unittest.IsolatedAsyncioTestCase):
             await call("a", url="b")
 
 
+def make_recorder():
+    """A tool that records exactly what text a script hands it."""
+    seen = {}
+
+    @tool(parse_docstring=True)
+    async def save_text(file_path: str, content: str) -> str:
+        """Store text under a path.
+
+        Args:
+            file_path: Where the text belongs.
+            content: The text to store.
+
+        Returns:
+            A confirmation line.
+        """
+        seen[file_path] = content
+        return f"saved {file_path}"
+
+    return save_text, seen
+
+
 class MetaToolTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.addCleanup(set_registry, None)
@@ -445,6 +466,83 @@ class DefaultRegistryTests(unittest.TestCase):
 
     def test_meta_tools_have_stable_names(self):
         self.assertEqual([tool_obj.name for tool_obj in META_TOOLS], ["run_tools"])
+
+
+class ScriptSourceFidelityTests(unittest.IsolatedAsyncioTestCase):
+    """String literals must reach tools byte-for-byte.
+
+    Scripts pass file bodies to write_file/edit_file as multi-line string
+    literals, so any text-level rewriting of the script source (indenting
+    it to wrap it in a function, expanding tabs, dedenting) silently
+    rewrites those bodies too — the agent's Python then lands on disk with
+    a body indented deeper than its `def` and dies with IndentationError.
+    """
+
+    def setUp(self):
+        self.addCleanup(set_registry, None)
+        self.save_text, self.saved = make_recorder()
+        set_registry(ToolRegistry([self.save_text]))
+
+    async def run_script(self, code: str) -> dict:
+        return json.loads(await run_tools.ainvoke({"code": code}))
+
+    async def test_multiline_string_reaches_the_tool_verbatim(self):
+        body = "def greet(name):\n    if name:\n        print(name)\n    return name\n"
+        outcome = await self.run_script('save_text("m.py", """' + body + '""")\n')
+
+        self.assertIsNone(outcome["error"])
+        self.assertEqual(self.saved["m.py"], body)
+        compile(self.saved["m.py"], "m.py", "exec")  # the reported symptom
+
+    async def test_tabs_inside_a_multiline_string_survive(self):
+        body = "all:\n\tcc -o app main.c\n\techo done\n"
+        outcome = await self.run_script('save_text("Makefile", """' + body + '""")\n')
+
+        self.assertIsNone(outcome["error"])
+        self.assertEqual(self.saved["Makefile"], body)
+
+    async def test_whitespace_only_lines_inside_a_string_are_kept(self):
+        body = "a = 1\n    \nb = 2\n"
+        outcome = await self.run_script('save_text("w.py", """' + body + '""")\n')
+
+        self.assertIsNone(outcome["error"])
+        self.assertEqual(self.saved["w.py"], body)
+
+    async def test_multiline_fstring_content_is_preserved(self):
+        code = 'name = "app"\n' 'save_text("f.py", f"""class {name}:\n    def run(self):\n        pass\n""")\n'
+        outcome = await self.run_script(code)
+
+        self.assertIsNone(outcome["error"])
+        self.assertEqual(self.saved["f.py"], "class app:\n    def run(self):\n        pass\n")
+        compile(self.saved["f.py"], "f.py", "exec")
+
+    async def test_string_content_is_not_dedented_with_the_script(self):
+        # Every line of this script shares a two-space prefix, which is
+        # exactly when a source-wide dedent bites the string content too.
+        code = '  text = """  keep this indent\n  and this one\n"""\n  save_text("d.txt", text)\n'
+        outcome = await self.run_script(code)
+
+        self.assertIsNone(outcome["error"])
+        self.assertEqual(self.saved["d.txt"], "  keep this indent\n  and this one\n")
+
+    async def test_a_wholly_indented_script_still_runs(self):
+        outcome = await self.run_script('    x = save_text("i.txt", "hi")\n    return x\n')
+
+        self.assertIsNone(outcome["error"])
+        self.assertEqual(outcome["result"], "saved i.txt")
+
+    async def test_a_tab_indented_script_still_runs(self):
+        outcome = await self.run_script('if True:\n\tsave_text("t.txt", "hi")\nreturn "ok"\n')
+
+        self.assertIsNone(outcome["error"])
+        self.assertEqual(outcome["result"], "ok")
+        self.assertEqual(self.saved["t.txt"], "hi")
+
+    async def test_unterminated_string_is_reported_not_mangled(self):
+        outcome = await self.run_script('save_text("x.py", """oops\n')
+
+        self.assertIsNotNone(outcome["error"])
+        self.assertIn("SyntaxError", outcome["error"])
 
 
 if __name__ == "__main__":
