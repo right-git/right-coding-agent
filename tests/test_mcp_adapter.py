@@ -340,3 +340,44 @@ class TestErrorHintAndImageDedupe(unittest.TestCase):
             with collecting_images() as images:
                 serialize_call_result(result, server="pw", tool_name="shot")
         self.assertEqual(len(images), 1)
+
+
+class TestEmbeddedImageResources(unittest.TestCase):
+    """The third spec-legal image path: EmbeddedResource blobs in tool results."""
+
+    def embedded(self, mime="image/png", blob="aGk="):
+        resource = SimpleNamespace(uri="res://shot", mimeType=mime, blob=blob, text=None)
+        return SimpleNamespace(type="resource", resource=resource)
+
+    def test_image_blob_resource_attaches(self):
+        with collecting_images() as images:
+            out = serialize_call_result(call_result(self.embedded()), server="srv", tool_name="shot")
+        self.assertEqual(len(images), 1)
+        self.assertEqual(images[0]["mime_type"], "image/png")
+        self.assertIn("attached", out)
+
+    def test_non_image_blob_stays_a_summary(self):
+        with collecting_images() as images:
+            out = serialize_call_result(
+                call_result(self.embedded(mime="application/pdf")), server="srv", tool_name="shot"
+            )
+        self.assertEqual(images, [])
+        self.assertIn("blob_chars", out)
+
+    def test_resource_link_to_local_image_file_attaches(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            png = Path(tmp) / "shot.png"
+            png.write_bytes(TestLinkedImageFiles.PNG_BYTES)
+            link = SimpleNamespace(
+                type="resource_link",
+                name="shot",
+                uri=f"file://{png}",
+                description=None,
+                mimeType="image/png",
+                size=None,
+            )
+            with collecting_images() as images:
+                serialize_call_result(call_result(link), server="srv", tool_name="shot")
+        self.assertEqual(len(images), 1)

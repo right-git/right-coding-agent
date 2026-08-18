@@ -272,13 +272,32 @@ def _serialize_content_item(
             summary["text"] = text
         blob = _read_field(resource, "blob")
         if blob is not None:
-            summary["blob_chars"] = len(blob) if isinstance(blob, str) else None
+            mime = str(_read_field(resource, "mimeType") or "")
+            # The third spec-legal image shape: an embedded resource whose
+            # blob IS the picture. Attach it like an image block would be.
+            if (
+                mime.startswith("image/")
+                and isinstance(blob, str)
+                and attach_image(blob, mime, label=f"{server}:{tool_name}")
+            ):
+                summary["image"] = "attached — you will see it right after this result"
+            else:
+                summary["blob_chars"] = len(blob) if isinstance(blob, str) else None
         parts.append(json.dumps(summary, ensure_ascii=False))
         return
     if item_type == "resource_link":
+        uri = str(_read_field(item, "uri", ""))
+        local = uri[len("file://") :] if uri.startswith("file://") else uri
+        attached_note = ""
+        if _IMAGE_LINK_RE.fullmatch(f"({local})"):
+            # A link-shaped result pointing at a local image file — same
+            # situation as a markdown link in text, same bounded attach.
+            if "attached" in _attach_linked_images(f"({local})", server=server, tool_name=tool_name):
+                attached_note = "attached — you will see it right after this result"
         parts.append(
             json.dumps(
                 {
+                    **({"image": attached_note} if attached_note else {}),
                     "type": "resource_link",
                     "name": _read_field(item, "name"),
                     "uri": str(_read_field(item, "uri", "")),
