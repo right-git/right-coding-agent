@@ -151,9 +151,14 @@ def _cmd_list(args: argparse.Namespace) -> int:
         console.print("No MCP servers configured.")
         return 0
 
-    # Lazy on purpose: importing the manager pulls in the MCP SDK
-    # (`transports.py`), and `add`/`add-json`/`get`/`remove` must keep
-    # working even if that import is broken.
+    # Imported here, not at module scope: only `list` needs a manager, so
+    # this keeps the other subcommands' imports light and scopes the
+    # `ToolRegistry` import to where it's built as a private instance below
+    # (never the process-default registry). This is NOT resilience against
+    # a broken MCP SDK import — `src.llm.tools`'s own `__init__.py` already
+    # imports `.mcp.manager` (and transitively the SDK) at module scope, so
+    # by the time any code in this file runs, that import has already
+    # happened or already failed.
     from src.llm.tools import ToolRegistry
 
     from .manager import McpManager
