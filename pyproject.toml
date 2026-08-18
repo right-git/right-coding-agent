@@ -16,6 +16,7 @@ dependencies = [
     "langchain-openai>=1.1.12",
     "lmdb>=2.3.0",
     "loguru>=0.7.3",
+    "mcp>=2.0.0",
     "mss>=10.2.0",
     "numpy>=2.4.4",
     "opencv-python-headless>=5.0.0.93",
