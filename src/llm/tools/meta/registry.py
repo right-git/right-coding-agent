@@ -14,6 +14,7 @@ from langchain_core.tools import BaseTool
 from ...statistics.script_calls import count_script_call
 
 SEARCH_LIMIT = 8
+MCP_SOURCE_PREFIX = "mcp:"
 
 # Names the interpreter resolves before the tool table (its builtins and the
 # `parallel` special form), plus the meta names run_tools injects into every
@@ -93,10 +94,11 @@ class ToolRegistry:
 
     def __init__(self, tools: Sequence[BaseTool] = ()) -> None:
         self._tools: dict[str, BaseTool] = {}
+        self._sources: dict[str, str] = {}
         for tool_obj in tools:
             self.register(tool_obj)
 
-    def register(self, tool_obj: BaseTool) -> None:
+    def register(self, tool_obj: BaseTool, source: str | None = None) -> None:
         if tool_obj.name in RESERVED_SCRIPT_NAMES:
             raise ValueError(
                 f"Tool name {tool_obj.name!r} collides with an interpreter "
@@ -105,21 +107,35 @@ class ToolRegistry:
         if tool_obj.name in self._tools:
             raise ValueError(f"Duplicate tool name: {tool_obj.name}")
         self._tools[tool_obj.name] = tool_obj
+        if source:
+            self._sources[tool_obj.name] = source
 
-    def all_tools(self) -> list[BaseTool]:
-        return list(self._tools.values())
+    def unregister(self, name: str) -> bool:
+        self._sources.pop(name, None)
+        return self._tools.pop(name, None) is not None
+
+    def source_of(self, name: str) -> str | None:
+        return self._sources.get(name)
+
+    def all_tools(self, source_prefix: str | None = None) -> list[BaseTool]:
+        tools = list(self._tools.values())
+        if source_prefix is None:
+            return tools
+        return [t for t in tools if (self._sources.get(t.name) or "").startswith(source_prefix)]
 
     def get(self, name: str) -> BaseTool | None:
         return self._tools.get(name.strip())
 
-    def search(self, query: str, limit: int = SEARCH_LIMIT) -> list[BaseTool]:
+    def search(self, query: str, limit: int = SEARCH_LIMIT, source_prefix: str | None = None) -> list[BaseTool]:
         """Keyword search over names and descriptions, best matches first."""
         terms = [term for term in query.casefold().split() if term]
         if not terms:
-            return self.all_tools()[:limit]
+            return self.all_tools(source_prefix=source_prefix)[:limit]
 
         scored: list[tuple[int, BaseTool]] = []
         for tool_obj in self._tools.values():
+            if source_prefix is not None and not (self._sources.get(tool_obj.name) or "").startswith(source_prefix):
+                continue
             name = tool_obj.name.casefold()
             description = (tool_obj.description or "").casefold()
             score = 0
@@ -147,7 +163,11 @@ class ToolRegistry:
         description = " ".join((tool_obj.description or "").split())
         head, separator, _ = description.partition(". ")
         summary = f"{head}." if separator else description
-        return f"{self.signature(tool_obj)} — {summary}"
+        line = f"{self.signature(tool_obj)} — {summary}"
+        source = self._sources.get(tool_obj.name) or ""
+        if source.startswith(MCP_SOURCE_PREFIX):
+            line += f" [MCP: {source[len(MCP_SOURCE_PREFIX):]}]"
+        return line
 
     def document(self, name: str) -> str | None:
         """Full contract of one tool, or None when the name is unknown."""

@@ -78,20 +78,21 @@ def _lookup_contract(registry: ToolRegistry, name: str) -> tuple[str | None, str
     return None, f"Unknown tool: {name!r}. Closest matches:\n{listed}"
 
 
-async def search_tools(query: str) -> str:
+async def search_tools(query: str, only_mcp: bool = False) -> str:
     """Keyword search over the registry; one `signature — summary` per line.
 
     Callable from inside run_tools scripts (and directly as a library
     function). When nothing matches, the full catalogue is listed instead.
     """
     registry = get_registry()
-    matches = registry.search(query)
+    source_prefix = "mcp:" if only_mcp else None
+    matches = registry.search(query, source_prefix=source_prefix)
     header = f"Tools matching {query!r}:"
     if not matches:
-        matches = registry.all_tools()
+        matches = registry.all_tools(source_prefix=source_prefix)
         header = f"Nothing matched {query!r}; every registered tool:"
     if not matches:
-        return "No tools are registered."
+        return "No MCP tools are registered." if only_mcp else "No tools are registered."
     return "\n".join(
         [
             header,
@@ -160,26 +161,28 @@ async def run_tools(code: str) -> tuple[str, list[dict]]:
 
     This is your only wired-in tool; every capability (the web, files, the
     shell, the user's screen, ...) is a registered tool your script calls
-    by bare name. Discovery happens in-script too: search_tools("a few
-    keywords") returns matching tools one per line as `signature — summary`,
-    and get_tool(["name", ...]) fetches full
-    contracts — they arrive in this result's `contracts` field
-    automatically, so call it as a bare statement and never print or
-    return its value. A listing line's signature is often all you need —
-    call such a tool right away, and reach for get_tool only when the
-    arguments need more detail than the signature shows. A contract
-    fetched by a script cannot steer later lines of that same script (the
-    code is already written), so when contracts are needed the usual shape
-    is one discovery script — search_tools(...) plus get_tool([...]) in
-    the same script — and the next script does the real work; skip
-    discovery entirely for tools whose contracts you already see in the
-    conversation. Tool calls look synchronous and are awaited for you, and
-    intermediate data never enters the conversation — only what you return
-    or print comes back. Batch aggressively: a small task belongs in ONE
-    script — create the directory tree, write every file, and run the one
-    verification check in the same run — because every extra run_tools
-    call re-sends the whole conversation at full price. Split only when a
-    later step genuinely depends on output you have not seen yet.
+    by bare name. Discovery happens in-script too:
+    search_tools("a few keywords", only_mcp=False) returns matching tools one
+    per line as `signature — summary`, and get_tool(["name", ...]) fetches
+    full contracts — they arrive in this result's `contracts` field
+    automatically, so call it as a bare statement and never print or return
+    its value. Tools provided by connected MCP servers are listed with an
+    [MCP: <server>] marker; pass only_mcp=True to browse only those. A
+    listing line's signature is often all you need — call such a tool right
+    away, and reach for get_tool only when the arguments need more detail
+    than the signature shows. A contract fetched by a script cannot steer
+    later lines of that same script (the code is already written), so when
+    contracts are needed the usual shape is one discovery script —
+    search_tools(...) plus get_tool([...]) in the same script — and the next
+    script does the real work; skip discovery entirely for tools whose
+    contracts you already see in the conversation. Tool calls look
+    synchronous and are awaited for you, and intermediate data never enters
+    the conversation — only what you return or print comes back. Batch
+    aggressively: a small task belongs in ONE script — create the directory
+    tree, write every file, and run the one verification check in the same
+    run — because every extra run_tools call re-sends the whole conversation
+    at full price. Split only when a later step genuinely depends on output
+    you have not seen yet.
 
     The language is a Python subset:
     - statements: assignment, if/elif/else, for, while, break/continue,
