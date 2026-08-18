@@ -6,10 +6,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.llm.tools.mcp.config import (
+    add_server,
     expand_env,
     load_mcp_servers,
     project_config_path,
+    remove_server,
+    scopes_containing,
+    server_entry_json,
     user_config_path,
+    McpServerConfig,
 )
 
 
@@ -78,6 +83,49 @@ class TestPaths(unittest.TestCase):
     def test_default_paths(self):
         self.assertEqual(project_config_path(Path("/repo")), Path("/repo/.mcp.json"))
         self.assertEqual(user_config_path(Path("/home/u")), Path("/home/u/.right-agent/mcp.json"))
+
+
+class TestPersistence(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.file = Path(self.tmp.name) / ".mcp.json"
+
+    def test_add_creates_file_and_round_trips(self):
+        config = McpServerConfig(name="pw", command="npx", args=["@playwright/mcp@latest"])
+        add_server(config, self.file)
+        loaded = load_mcp_servers(project_file=self.file, user_file=self.file.with_name("none.json"), env={})
+        self.assertEqual(loaded["pw"].command, "npx")
+
+    def test_add_preserves_foreign_json_keys(self):
+        write_json(self.file, {"otherTool": {"keep": True}, "mcpServers": {"old": {"command": "x"}}})
+        add_server(McpServerConfig(name="new", transport="http", url="https://n/"), self.file)
+        payload = json.loads(self.file.read_text(encoding="utf-8"))
+        self.assertEqual(payload["otherTool"], {"keep": True})
+        self.assertIn("old", payload["mcpServers"])
+        self.assertIn("new", payload["mcpServers"])
+
+    def test_stdio_entry_omits_url_fields(self):
+        entry = server_entry_json(McpServerConfig(name="pw", command="npx"))
+        self.assertEqual(entry, {"type": "stdio", "command": "npx"})
+
+    def test_http_entry_shape(self):
+        entry = server_entry_json(McpServerConfig(name="c", transport="http", url="https://c/", headers={"A": "B"}))
+        self.assertEqual(entry, {"type": "http", "url": "https://c/", "headers": {"A": "B"}})
+
+    def test_remove_true_then_false(self):
+        add_server(McpServerConfig(name="pw", command="npx"), self.file)
+        self.assertTrue(remove_server("pw", self.file))
+        self.assertFalse(remove_server("pw", self.file))
+
+    def test_scopes_containing(self):
+        user = Path(self.tmp.name) / "user.json"
+        add_server(McpServerConfig(name="both", command="x"), self.file)
+        add_server(McpServerConfig(name="both", command="x"), user)
+        add_server(McpServerConfig(name="only-user", command="x"), user)
+        self.assertEqual(scopes_containing("both", project_file=self.file, user_file=user), ["project", "user"])
+        self.assertEqual(scopes_containing("only-user", project_file=self.file, user_file=user), ["user"])
+        self.assertEqual(scopes_containing("nope", project_file=self.file, user_file=user), [])
 
 
 if __name__ == "__main__":

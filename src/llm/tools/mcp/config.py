@@ -110,3 +110,61 @@ def load_mcp_servers(
             if parsed is not None:
                 servers[name] = parsed
     return servers
+
+
+def server_entry_json(config: McpServerConfig) -> dict:
+    """The on-disk entry: always an explicit `type`, empty fields omitted."""
+    entry: dict = {"type": config.transport}
+    if config.transport == "stdio":
+        entry["command"] = config.command
+        if config.args:
+            entry["args"] = list(config.args)
+        if config.env:
+            entry["env"] = dict(config.env)
+    else:
+        entry["url"] = config.url
+        if config.headers:
+            entry["headers"] = dict(config.headers)
+    return entry
+
+
+def _read_payload(file: Path) -> dict:
+    try:
+        payload = json.loads(file.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_payload(file: Path, payload: dict) -> None:
+    file.parent.mkdir(parents=True, exist_ok=True)
+    file.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def add_server(config: McpServerConfig, file: Path) -> None:
+    payload = _read_payload(file)
+    servers = payload.get("mcpServers")
+    if not isinstance(servers, dict):
+        servers = {}
+    servers[config.name] = server_entry_json(config)
+    payload["mcpServers"] = servers
+    _write_payload(file, payload)
+
+
+def remove_server(name: str, file: Path) -> bool:
+    payload = _read_payload(file)
+    servers = payload.get("mcpServers")
+    if not isinstance(servers, dict) or name not in servers:
+        return False
+    del servers[name]
+    _write_payload(file, payload)
+    return True
+
+
+def scopes_containing(name: str, project_file: Path | None = None, user_file: Path | None = None) -> list[str]:
+    found = []
+    if name in read_raw_entries(project_file or project_config_path()):
+        found.append("project")
+    if name in read_raw_entries(user_file or user_config_path()):
+        found.append("user")
+    return found
