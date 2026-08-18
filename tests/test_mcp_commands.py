@@ -48,6 +48,9 @@ class FakeManager:
 class FakeUI:
     def __init__(self):
         self.console = Console(file=io.StringIO(), width=100)
+        self.available_models = []
+        self.model_catalog = {}
+        self.commands = CommandHandler(self)
 
 
 class TestMcpCommand(unittest.TestCase):
@@ -133,6 +136,36 @@ class TestRunMcpAction(unittest.TestCase):
         out = asyncio.run(run_mcp_action(McpAction("reconnect", "pw"), self.manager, self.console))
         self.assertIsNone(out)
         self.assertIn("[weird]tag[/mismatch]", self.console.file.getvalue())
+
+
+class TestCompleterMcp(unittest.TestCase):
+    def setUp(self):
+        self.manager = FakeManager()
+        set_mcp_manager(self.manager)
+        self.addCleanup(set_mcp_manager, None)
+
+    def completions(self, text):
+        from prompt_toolkit.document import Document
+
+        from src.ui.completer import CommandCompleter
+
+        ui = FakeUI()
+        ui.available_models = []
+        ui.model_catalog = {}
+        completer = CommandCompleter(ui)
+        return [c.text for c in completer.get_completions(Document(text, len(text)), None)]
+
+    def test_prompt_commands_offered(self):
+        self.assertIn("/mcp__pw__review", self.completions("/mcp_"))
+
+    def test_mcp_offered(self):
+        self.assertIn("/mcp", self.completions("/mc"))
+
+    def test_mcp_subcommands(self):
+        self.assertIn("reconnect", self.completions("/mcp rec"))
+
+    def test_server_names_after_reconnect(self):
+        self.assertIn("pw", self.completions("/mcp reconnect p"))
 
 
 if __name__ == "__main__":

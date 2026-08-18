@@ -25,6 +25,7 @@ COMMANDS: dict[str, str] = {
     "/voice": "voice mode (push-to-talk + TTS)",
     "/check": "check & request macOS permissions",
     "/log-level": "show or change log level",
+    "/mcp": "MCP servers: status / reconnect / login / logout",
     "/clear": "clear screen and history",
     "/quit": "exit",
 }
@@ -42,6 +43,9 @@ class CommandCompleter(Completer):
         if " " not in text:
             needle = text.lower()
             for command, description in COMMANDS.items():
+                if command.startswith(needle):
+                    yield Completion(command, start_position=-len(text), display_meta=description)
+            for command, description in self._mcp_prompt_commands():
                 if command.startswith(needle):
                     yield Completion(command, start_position=-len(text), display_meta=description)
             return
@@ -73,6 +77,14 @@ class CommandCompleter(Completer):
         if command in ("/log-level", "/loglevel"):
             levels = tuple(sorted(level.lower() for level in app_logging.VALID_LEVELS))
             yield from self._option_completions(word, levels)
+            return
+        if command == "/mcp":
+            first, _, rest = argument.partition(" ")
+            if not rest and " " not in argument:
+                yield from self._option_completions(word, ("reconnect", "login", "logout"))
+                return
+            yield from self._option_completions(word, tuple(self._mcp_server_names()))
+            return
 
     def _model_completions(self, word: str):
         matched, _ = self.ui.commands.catalog_matches(word)
@@ -94,3 +106,21 @@ class CommandCompleter(Completer):
         for option in options:
             if option.startswith(needle):
                 yield Completion(option, start_position=-len(word))
+
+    @staticmethod
+    def _mcp_prompt_commands() -> list[tuple[str, str]]:
+        try:
+            from src.llm.tools.mcp.manager import get_mcp_manager
+
+            return get_mcp_manager().prompt_commands()
+        except Exception:
+            return []
+
+    @staticmethod
+    def _mcp_server_names() -> list[str]:
+        try:
+            from src.llm.tools.mcp.manager import get_mcp_manager
+
+            return [status.name for status in get_mcp_manager().statuses()]
+        except Exception:
+            return []
