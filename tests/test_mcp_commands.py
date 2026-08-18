@@ -14,6 +14,8 @@ from src.ui.commands import CommandHandler, McpAction, run_mcp_action
 class FakeManager:
     def __init__(self):
         self.reconnected = []
+        self.logged_in = []
+        self.logged_out = []
 
     def statuses(self):
         return [
@@ -40,6 +42,14 @@ class FakeManager:
     async def reconnect(self, name):
         self.reconnected.append(name)
         return self.statuses()[0]
+
+    async def login(self, name):
+        self.logged_in.append(name)
+        return self.statuses()[0]
+
+    async def logout(self, name):
+        self.logged_out.append(name)
+        return self.statuses()[1]
 
     async def get_prompt(self, server, prompt, arguments):
         return f"PROMPT {server}/{prompt} {arguments}"
@@ -116,6 +126,32 @@ class TestRunMcpAction(unittest.TestCase):
         action = McpAction("prompt", "/mcp__pw__greet")
         out = asyncio.run(run_mcp_action(action, self.manager, self.console))
         self.assertIn("PROMPT pw/greet", out)
+
+    def test_login_awaits_manager_and_prints_state(self):
+        out = asyncio.run(run_mcp_action(McpAction("login", "pw"), self.manager, self.console))
+        self.assertIsNone(out)
+        self.assertEqual(self.manager.logged_in, ["pw"])
+        printed = self.console.file.getvalue()
+        self.assertIn("connected", printed)
+        # The browser flow blocks, so the user is told what is happening first.
+        self.assertIn("browser", printed.lower())
+
+    def test_logout_awaits_manager_and_prints_state(self):
+        out = asyncio.run(run_mcp_action(McpAction("logout", "ctx"), self.manager, self.console))
+        self.assertIsNone(out)
+        self.assertEqual(self.manager.logged_out, ["ctx"])
+        printed = self.console.file.getvalue()
+        self.assertIn("failed", printed)
+        self.assertIn("401", printed)
+
+    def test_login_failure_prints_not_raises(self):
+        async def boom(name):
+            raise RuntimeError("[weird]no browser[/mismatch]")
+
+        self.manager.login = boom
+        out = asyncio.run(run_mcp_action(McpAction("login", "pw"), self.manager, self.console))
+        self.assertIsNone(out)
+        self.assertIn("[weird]no browser[/mismatch]", self.console.file.getvalue())
 
     def test_failures_print_not_raise(self):
         async def boom(name):

@@ -30,6 +30,7 @@ from ..meta.defaults import get_registry
 from ..meta.registry import MCP_SOURCE_PREFIX, ToolRegistry
 from .adapter import build_mcp_tool, build_prompt_command
 from .config import McpServerConfig, load_mcp_servers
+from .oauth import NeedsInteractiveAuth, build_oauth_provider, clear_tokens, has_stored_tokens
 from .transports import default_session_factory
 
 # A stopping connection gets this long to unwind its contexts before it is
@@ -83,6 +84,11 @@ class _Connection:
     generation: int = 0
     # Serializes teardown+setup; created lazily inside the running loop.
     lock: asyncio.Lock | None = None
+    # One-shot auth provider for the next connect: `login` stashes its
+    # interactive (browser-opening) provider here and `_auth_for` consumes it.
+    # Set and cleared under the connection lock, so it can never leak into a
+    # reconnect that some other caller started.
+    override_auth: Any | None = None
 
 
 def _first_sentence(text: str) -> str:
@@ -97,6 +103,24 @@ def _read_field(value: Any, name: str, default=None):
     if isinstance(value, dict):
         return value.get(name, default)
     return getattr(value, name, default)
+
+
+def _carries(error: BaseException | None, wanted: type[BaseException], depth: int = 8) -> bool:
+    """True when `error` is, wraps, or was caused by a `wanted` exception.
+
+    An exception raised inside an OAuth handler surfaces several layers away:
+    anyio task groups re-raise as `ExceptionGroup`, and httpx/the SDK re-raise
+    with the original attached as `__cause__`/`__context__`. A plain isinstance
+    check on the outermost object would miss all of those and report FAILED
+    where the user needs to be told to log in.
+    """
+    if error is None or depth <= 0:
+        return False
+    if isinstance(error, wanted):
+        return True
+    nested = list(getattr(error, "exceptions", ()) or ())
+    nested += [error.__cause__, error.__context__]
+    return any(_carries(item, wanted, depth - 1) for item in nested)
 
 
 class McpManager:
@@ -153,12 +177,55 @@ class McpManager:
             logger.exception("MCP status callback failed for server [{}]", conn.config.name)
 
     def _auth_for(self, config: McpServerConfig) -> Any | None:
-        """OAuth provider for this server; none until the oauth layer lands."""
-        return None
+        """The auth provider one connect attempt should use, if any.
+
+        `login`'s interactive provider wins and is consumed once — every later
+        connect falls back to the silent one. Otherwise a remote server with
+        tokens on file gets a non-interactive provider, which refreshes an
+        expired token without asking and raises `NeedsInteractiveAuth` if the
+        server wants a fresh consent. A server with nothing stored connects
+        unauthenticated: that first 401 is what puts it in `NEEDS_AUTH`.
+        """
+        conn = self._connections.get(config.name)
+        if conn is not None and conn.override_auth is not None:
+            provider, conn.override_auth = conn.override_auth, None
+            return provider
+        if config.transport not in ("http", "sse") or not config.url:
+            return None
+        try:
+            if not has_stored_tokens(config.name, config.url):
+                return None
+            return build_oauth_provider(config, interactive=False)[0]
+        except Exception:
+            # An unreadable token file must cost at most an unauthenticated
+            # attempt (and a NEEDS_AUTH status), never a crashed connection.
+            logger.exception("Could not build an OAuth provider for MCP server [{}]", config.name)
+            return None
 
     def _failure_state(self, config: McpServerConfig, error: Exception) -> ServerState:
-        """Which state a connection failure lands in (oauth adds NEEDS_AUTH)."""
+        """Which state a connection failure lands in.
+
+        `NeedsInteractiveAuth` is definitive. Otherwise a remote server that
+        answered 401 while we have no token on file is a server asking to be
+        logged into; with tokens on file the same 401 means a revoked grant or
+        a broken server, and showing the real error beats a misleading hint.
+        """
+        if _carries(error, NeedsInteractiveAuth):
+            return ServerState.NEEDS_AUTH
+        if config.transport in ("http", "sse") and "401" in str(error):
+            try:
+                if not has_stored_tokens(config.name, config.url or ""):
+                    return ServerState.NEEDS_AUTH
+            except Exception:
+                logger.exception("Could not read stored MCP tokens for server [{}]", config.name)
         return ServerState.FAILED
+
+    @staticmethod
+    def _failure_error(config: McpServerConfig, state: ServerState, error: Exception) -> str:
+        """The error text a failed connection reports."""
+        if state == ServerState.NEEDS_AUTH:
+            return f"needs auth — run /mcp login {config.name}"
+        return str(error)
 
     # ----------------------------------------------------------- connection
 
@@ -249,7 +316,8 @@ class McpManager:
         except Exception as error:
             logger.warning("MCP server [{}] failed: {}", conn.config.name, error)
             if self._owns(conn):
-                self._set_state(conn, self._failure_state(conn.config, error), str(error))
+                state = self._failure_state(conn.config, error)
+                self._set_state(conn, state, self._failure_error(conn.config, state, error))
         finally:
             if self._owns(conn):
                 self._unregister_tools(conn)
@@ -343,6 +411,57 @@ class McpManager:
                 logger.debug("MCP server [{}] was already reconnected by another caller", name)
                 return self._status_of(conn)
             await self._disconnect(conn)
+            await self._connect(conn)
+            return self._status_of(conn)
+
+    async def login(self, name: str) -> ServerStatus:
+        """Authorize one remote server in the browser, then reconnect it.
+
+        A login is a reconnect that carries an interactive provider, so it
+        takes the same per-connection lock: nothing else may tear the session
+        down while the user is on the consent screen. The SDK runs the actual
+        OAuth flow lazily, during the transport's first request — which is why
+        the provider has to be stashed for `_auth_for` (`override_auth`) rather
+        than passed down, and why the callback server must outlive `_connect`
+        and be stopped only in the `finally`.
+        """
+        conn = self._require(name)
+        config = conn.config
+        if config.transport not in ("http", "sse"):
+            raise ValueError(f"MCP server '{name}' is a {config.transport} server; OAuth applies to http/sse servers")
+        async with self._lock_of(conn):
+            # Built before the disconnect: a callback port that cannot bind
+            # must not cost the user a working connection.
+            provider, callback = build_oauth_provider(config, interactive=True)
+            if callback is not None:
+                callback.start()
+            try:
+                await self._disconnect(conn)
+                conn.override_auth = provider
+                await self._connect(conn)
+            finally:
+                # One-shot: a connect that never consumed it (a timeout, say)
+                # must not authorize some later reconnect behind the user.
+                conn.override_auth = None
+                if callback is not None:
+                    callback.stop()
+            return self._status_of(conn)
+
+    async def logout(self, name: str) -> ServerStatus:
+        """Forget one server's tokens and reconnect it unauthenticated.
+
+        The reconnect is the point: it proves the logout took, and it leaves
+        the server in whatever state it really is — usually `NEEDS_AUTH`.
+        """
+        conn = self._require(name)
+        config = conn.config
+        async with self._lock_of(conn):
+            await self._disconnect(conn)
+            if config.transport in ("http", "sse") and config.url:
+                try:
+                    clear_tokens(config.name, config.url)
+                except Exception:
+                    logger.exception("Could not clear stored MCP tokens for server [{}]", config.name)
             await self._connect(conn)
             return self._status_of(conn)
 

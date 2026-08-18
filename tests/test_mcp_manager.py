@@ -288,6 +288,313 @@ class TestManagerLifecycle(unittest.TestCase):
         asyncio.run(scenario())
 
 
+class _FakeCallbackServer:
+    """Records the interactive callback server's lifecycle."""
+
+    def __init__(self):
+        self.started = 0
+        self.stopped = 0
+
+    def start(self):
+        self.started += 1
+
+    def stop(self):
+        self.stopped += 1
+
+
+def remote_config(name="remote", transport="http"):
+    return McpServerConfig(name=name, transport=transport, url="https://r/mcp")
+
+
+def remote_manager(config=None, factory=None, registry=None):
+    config = config or remote_config()
+    return McpManager(configs={config.name: config}, session_factory=factory, registry=registry or ToolRegistry())
+
+
+class TestAuthWiring(unittest.TestCase):
+    """`_auth_for`: stdio never authenticates, http refreshes silently."""
+
+    def test_stdio_never_builds_a_provider(self):
+        manager = McpManager(configs={"srv": McpServerConfig(name="srv", command="fake")}, registry=ToolRegistry())
+        with patch.object(manager_module, "build_oauth_provider") as build:
+            self.assertIsNone(manager._auth_for(manager._connections["srv"].config))
+        build.assert_not_called()
+
+    def test_http_without_stored_tokens_stays_unauthenticated(self):
+        manager = remote_manager()
+        with patch.object(manager_module, "has_stored_tokens", return_value=False):
+            with patch.object(manager_module, "build_oauth_provider") as build:
+                self.assertIsNone(manager._auth_for(manager._connections["remote"].config))
+        build.assert_not_called()
+
+    def test_http_with_stored_tokens_builds_a_silent_provider(self):
+        manager = remote_manager()
+        provider = object()
+        with patch.object(manager_module, "has_stored_tokens", return_value=True):
+            with patch.object(manager_module, "build_oauth_provider", return_value=(provider, None)) as build:
+                self.assertIs(manager._auth_for(manager._connections["remote"].config), provider)
+        self.assertIs(build.call_args.kwargs["interactive"], False)
+
+    def test_override_auth_wins_and_is_consumed_once(self):
+        manager = remote_manager()
+        conn = manager._connections["remote"]
+        provider = object()
+        conn.override_auth = provider
+        with patch.object(manager_module, "has_stored_tokens", return_value=True):
+            with patch.object(manager_module, "build_oauth_provider", return_value=(object(), None)):
+                self.assertIs(manager._auth_for(conn.config), provider)
+                self.assertIsNone(conn.override_auth)
+                # The stash is one-shot: the next connect refreshes normally.
+                self.assertIsNotNone(manager._auth_for(conn.config))
+
+    def test_a_broken_token_file_does_not_break_connecting(self):
+        manager = remote_manager()
+        with patch.object(manager_module, "has_stored_tokens", side_effect=OSError("unreadable")):
+            self.assertIsNone(manager._auth_for(manager._connections["remote"].config))
+
+
+class TestNeedsAuth(unittest.TestCase):
+    def needs_auth_manager(self, error, config=None):
+        config = config or remote_config()
+
+        @asynccontextmanager
+        async def factory(config, auth=None):
+            raise error
+            yield  # pragma: no cover
+
+        return remote_manager(config=config, factory=factory)
+
+    def run_start(self, manager, stored=False):
+        """Start once and report the resulting status.
+
+        `has_stored_tokens` is always patched: unpatched it would read the
+        developer's real `~/.right-agent/mcp-tokens.json`.
+        """
+
+        async def scenario():
+            await manager.start()
+            status = manager.statuses()[0]
+            await manager.stop()
+            return status
+
+        with patch.object(manager_module, "has_stored_tokens", return_value=stored):
+            return asyncio.run(scenario())
+
+    def test_needs_interactive_auth_reports_needs_auth(self):
+        from src.llm.tools.mcp.oauth import NeedsInteractiveAuth
+
+        status = self.run_start(self.needs_auth_manager(NeedsInteractiveAuth("authorization required")))
+        self.assertEqual(status.state, ServerState.NEEDS_AUTH)
+        self.assertIn("/mcp login remote", status.error)
+
+    def test_needs_interactive_auth_survives_transport_exception_wrapping(self):
+        # anyio task groups re-raise as ExceptionGroup and httpx re-raises with
+        # the original as __cause__, so the manager must look inside both.
+        from src.llm.tools.mcp.oauth import NeedsInteractiveAuth
+
+        inner = NeedsInteractiveAuth("run /mcp login remote")
+        wrapped = ExceptionGroup("transport failed", [RuntimeError("closed"), inner])
+        self.assertEqual(self.run_start(self.needs_auth_manager(wrapped)).state, ServerState.NEEDS_AUTH)
+
+        chained = RuntimeError("connection closed")
+        chained.__cause__ = inner
+        self.assertEqual(self.run_start(self.needs_auth_manager(chained)).state, ServerState.NEEDS_AUTH)
+
+    def test_http_401_without_tokens_reports_needs_auth(self):
+        status = self.run_start(self.needs_auth_manager(RuntimeError("HTTP 401 Unauthorized")))
+        self.assertEqual(status.state, ServerState.NEEDS_AUTH)
+        self.assertIn("/mcp login remote", status.error)
+
+    def test_http_401_with_stored_tokens_reports_failed(self):
+        # Tokens exist and the server still refuses: that is a broken server or
+        # a revoked grant, not a missing login — surfacing the real error helps.
+        status = self.run_start(self.needs_auth_manager(RuntimeError("HTTP 401 Unauthorized")), stored=True)
+        self.assertEqual(status.state, ServerState.FAILED)
+        self.assertIn("401", status.error)
+
+    def test_sse_401_without_tokens_reports_needs_auth(self):
+        config = McpServerConfig(name="remote", transport="sse", url="https://r/sse")
+        status = self.run_start(self.needs_auth_manager(RuntimeError("401"), config=config))
+        self.assertEqual(status.state, ServerState.NEEDS_AUTH)
+
+    def test_other_http_errors_report_failed(self):
+        status = self.run_start(self.needs_auth_manager(RuntimeError("HTTP 503 Service Unavailable")))
+        self.assertEqual(status.state, ServerState.FAILED)
+
+    def test_stdio_failures_never_report_needs_auth(self):
+        config = McpServerConfig(name="remote", command="fake")
+        status = self.run_start(self.needs_auth_manager(RuntimeError("401"), config=config))
+        self.assertEqual(status.state, ServerState.FAILED)
+
+
+class TestLoginLogout(unittest.TestCase):
+    """`login`/`logout` are disconnect+connect cycles under the same lock."""
+
+    def setUp(self):
+        self.auths = []
+        self.callback = _FakeCallbackServer()
+        self.provider = object()
+
+    @asynccontextmanager
+    async def factory(self, config, auth=None):
+        self.auths.append(auth)
+        yield FakeSession(tools=[remote_tool()])
+
+    def manager(self, config=None):
+        return remote_manager(config=config, factory=self.factory)
+
+    def patched_build(self):
+        return patch.object(manager_module, "build_oauth_provider", return_value=(self.provider, self.callback))
+
+    def test_login_connects_with_the_interactive_provider(self):
+        manager = self.manager()
+
+        async def scenario():
+            with patch.object(manager_module, "has_stored_tokens", return_value=False):
+                await manager.start()
+                with self.patched_build() as build:
+                    status = await manager.login("remote")
+                await manager.stop()
+            return status, build
+
+        status, build = asyncio.run(scenario())
+        self.assertEqual(status.state, ServerState.CONNECTED)
+        self.assertIs(build.call_args.kwargs["interactive"], True)
+        # First connect unauthenticated, second one carrying the login provider.
+        self.assertEqual(self.auths, [None, self.provider])
+        self.assertEqual((self.callback.started, self.callback.stopped), (1, 1))
+
+    def test_login_clears_the_override_after_the_attempt(self):
+        manager = self.manager()
+
+        async def scenario():
+            with patch.object(manager_module, "has_stored_tokens", return_value=False):
+                with self.patched_build():
+                    await manager.login("remote")
+                override = manager._connections["remote"].override_auth
+                await manager.stop()
+            return override
+
+        self.assertIsNone(asyncio.run(scenario()))
+
+    def test_login_stops_the_callback_server_when_connecting_fails(self):
+        @asynccontextmanager
+        async def failing_factory(config, auth=None):
+            self.auths.append(auth)
+            raise ConnectionError("refused")
+            yield  # pragma: no cover
+
+        manager = remote_manager(factory=failing_factory)
+
+        async def scenario():
+            with patch.object(manager_module, "has_stored_tokens", return_value=False):
+                with self.patched_build():
+                    status = await manager.login("remote")
+                await manager.stop()
+            return status
+
+        status = asyncio.run(scenario())
+        self.assertNotEqual(status.state, ServerState.CONNECTED)
+        self.assertEqual(self.callback.stopped, 1)
+
+    def test_login_stops_the_callback_server_when_the_provider_flow_raises(self):
+        manager = self.manager()
+
+        async def scenario():
+            with patch.object(manager_module, "has_stored_tokens", return_value=False):
+                with patch.object(manager, "_connect", side_effect=RuntimeError("boom")):
+                    with self.patched_build():
+                        with self.assertRaises(RuntimeError):
+                            await manager.login("remote")
+            return manager._connections["remote"].override_auth
+
+        self.assertIsNone(asyncio.run(scenario()))
+        self.assertEqual(self.callback.stopped, 1)
+
+    def test_login_on_a_stdio_server_is_refused(self):
+        manager = self.manager(config=McpServerConfig(name="remote", command="fake"))
+
+        async def scenario():
+            with self.patched_build() as build:
+                with self.assertRaises(ValueError):
+                    await manager.login("remote")
+            return build
+
+        build = asyncio.run(scenario())
+        build.assert_not_called()
+        self.assertEqual(self.callback.started, 0)
+
+    def test_login_on_an_unknown_server_raises(self):
+        manager = self.manager()
+
+        async def scenario():
+            with self.assertRaises(ValueError):
+                await manager.login("nope")
+
+        asyncio.run(scenario())
+
+    def test_login_holds_the_connection_lock(self):
+        manager = self.manager()
+        conn = manager._connections["remote"]
+
+        async def scenario():
+            with patch.object(manager_module, "has_stored_tokens", return_value=False):
+                async with manager._lock_of(conn):
+                    with self.patched_build():
+                        login = asyncio.create_task(manager.login("remote"))
+                        await asyncio.sleep(0.05)
+                        # Blocked on the lock, so the callback server is not up
+                        # and no connect has been attempted behind our back.
+                        self.assertEqual(self.callback.started, 0)
+                        self.assertFalse(login.done())
+                    login.cancel()
+                    await asyncio.gather(login, return_exceptions=True)
+
+        asyncio.run(scenario())
+
+    def test_logout_clears_tokens_and_reconnects(self):
+        manager = self.manager()
+
+        async def scenario():
+            with patch.object(manager_module, "has_stored_tokens", return_value=False):
+                await manager.start()
+                with patch.object(manager_module, "clear_tokens", return_value=True) as clear:
+                    status = await manager.logout("remote")
+                await manager.stop()
+            return status, clear
+
+        status, clear = asyncio.run(scenario())
+        self.assertEqual(status.state, ServerState.CONNECTED)
+        clear.assert_called_once_with("remote", "https://r/mcp")
+        # Reconnected, and without any leftover login provider.
+        self.assertEqual(self.auths, [None, None])
+
+    def test_logout_reconnects_even_when_nothing_was_stored(self):
+        manager = self.manager()
+
+        async def scenario():
+            with patch.object(manager_module, "has_stored_tokens", return_value=False):
+                with patch.object(manager_module, "clear_tokens", return_value=False):
+                    status = await manager.logout("remote")
+                await manager.stop()
+            return status
+
+        self.assertEqual(asyncio.run(scenario()).state, ServerState.CONNECTED)
+
+    def test_logout_on_a_stdio_server_just_reconnects(self):
+        manager = self.manager(config=McpServerConfig(name="remote", command="fake"))
+
+        async def scenario():
+            with patch.object(manager_module, "clear_tokens") as clear:
+                status = await manager.logout("remote")
+                await manager.stop()
+            return status, clear
+
+        status, clear = asyncio.run(scenario())
+        self.assertEqual(status.state, ServerState.CONNECTED)
+        clear.assert_not_called()
+
+
 class _FakeStreams:
     """Stand-in for a transport's yielded (read, write[, ...]) tuple."""
 

@@ -92,7 +92,21 @@ async def run_mcp_action(action: McpAction, manager, console) -> str | None:
             return None
 
         if action.kind in ("login", "logout"):
-            console.print(f"  MCP {action.kind} arrives in a later task", style=MCP_INFO)
+            if action.kind == "login":
+                # The browser flow blocks the REPL until consent comes back,
+                # so say so before disappearing into it.
+                console.print(f"  {action.argument}: opening a browser to authorize…", style=MCP_INFO)
+                status = await manager.login(action.argument)
+            else:
+                status = await manager.logout(action.argument)
+            style = MCP_SUCCESS if status.state.value == "connected" else MCP_ERROR
+            detail = f" — {status.error}" if status.error else ""
+            console.print(
+                f"  {action.argument}: {status.state.value}{detail}",
+                style=style,
+                markup=False,
+                highlight=False,
+            )
             return None
 
         if action.kind == "prompt":
