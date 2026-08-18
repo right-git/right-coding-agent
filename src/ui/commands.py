@@ -25,6 +25,16 @@ CLEAR_WORDS = ("none", "off", "default")
 MAX_LISTED_MATCHES = 8
 MAX_SEARCH_RESULTS = 15
 MCP_SUBCOMMANDS = ("reconnect", "login", "logout")
+# The few built-in commands `handle()` matches by more than one spelling.
+# Named here (instead of as inline literals in `handle()`) so `_skills()`'s
+# shadow-detection can union them with `completer.COMMANDS`'s canonical
+# names — an alias added to only one of the two spots would silently make
+# `/skills` claim a shadowed slug (e.g. "temp", "exit") is plain
+# user-invocable when it is actually unreachable at runtime.
+QUIT_COMMANDS = ("/quit", "/exit", "/q")
+TEMPERATURE_COMMANDS = ("/temperature", "/temp")
+LOG_LEVEL_COMMANDS = ("/log-level", "/loglevel")
+COMMAND_ALIASES = QUIT_COMMANDS + TEMPERATURE_COMMANDS + LOG_LEVEL_COMMANDS
 TOOL_DIRECTIVE_HEADER = (
     "[Tool directive: use the tool(s) below for this request — the user "
     "picked them explicitly. Contracts follow; no need for search_tools/get_tool.]"
@@ -163,7 +173,7 @@ class CommandHandler:
         command = command.lower()
         argument = argument.strip()
 
-        if command in ("/quit", "/exit", "/q"):
+        if command in QUIT_COMMANDS:
             self.ui.print_goodbye()
             sys.exit(0)
         if command == "/help":
@@ -174,7 +184,7 @@ class CommandHandler:
             return self._switch_model(argument) if argument else self._print_models("")
         if command == "/effort":
             return self._switch_effort(argument)
-        if command in ("/temperature", "/temp"):
+        if command in TEMPERATURE_COMMANDS:
             return self._switch_temperature(argument)
         if command == "/paste":
             return self._paste_image()
@@ -186,7 +196,7 @@ class CommandHandler:
             return self._toggle_voice(argument)
         if command == "/check":
             return self._run_check()
-        if command in ("/log-level", "/loglevel"):
+        if command in LOG_LEVEL_COMMANDS:
             return self._switch_log_level(argument) if argument else self._print_log_level()
         if command == "/clear":
             self.ui.pending_images.clear()
@@ -803,6 +813,7 @@ class CommandHandler:
             return None
         from src.ui.completer import COMMANDS as _BUILTINS
 
+        builtin_names = frozenset(_BUILTINS) | frozenset(COMMAND_ALIASES)
         self.console.print()
         for skill in sorted(store.skills.values(), key=lambda item: item.slug):
             who = {(True, True): "user+model", (True, False): "user", (False, True): "model"}.get(
@@ -810,7 +821,7 @@ class CommandHandler:
             )
             head = skill.description[:70]
             line = f"  /{skill.slug:<22} {skill.scope:<8} {who:<11} {head}"
-            if f"/{skill.slug}" in _BUILTINS:
+            if f"/{skill.slug}" in builtin_names:
                 line += "  (shadowed by a built-in command)"
             self.console.print(line, style="info", markup=False, highlight=False)
         self.console.print()

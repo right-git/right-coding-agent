@@ -75,6 +75,25 @@ class TestSkillCommands(unittest.TestCase):
         self.assertIsNone(self.handler.handle("/skills"))
         self.assertIn("no skills", self.output().lower())
 
+    def test_alias_commands_are_flagged_as_shadowed(self):
+        # "temp" and "exit" are not keys of completer.COMMANDS (only the
+        # canonical "/temperature" and "/quit" are) but handle() still
+        # treats them as built-in via TEMPERATURE_COMMANDS/QUIT_COMMANDS —
+        # /skills must flag them as shadowed too, or the listing misleads
+        # the user into thinking the slug is reachable.
+        make_skill_dir(Path(self.tmp.name), "temp", "---\ndescription: d\n---\nbody\n")
+        make_skill_dir(Path(self.tmp.name), "exit", "---\ndescription: d\n---\nbody\n")
+        self.store.scan()
+        self.assertIsNone(self.handler.handle("/skills"))
+        lines = self.output().splitlines()
+
+        def line_for(slug: str) -> str:
+            return next(line for line in lines if line.strip().startswith(f"/{slug} "))
+
+        self.assertIn("(shadowed by a built-in command)", line_for("temp"))
+        self.assertIn("(shadowed by a built-in command)", line_for("exit"))
+        self.assertNotIn("shadowed", line_for("deploy"))
+
 
 if __name__ == "__main__":
     unittest.main()
