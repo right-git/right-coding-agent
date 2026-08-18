@@ -88,14 +88,19 @@ async def run_mcp_action(action: McpAction, manager, console) -> str | None:
         if action.kind == "reconnect":
             status = await manager.reconnect(action.argument)
             style = MCP_SUCCESS if status.state.value == "connected" else MCP_ERROR
-            console.print(f"  {action.argument}: {status.state.value}", style=style)
+            console.print(f"  {action.argument}: {status.state.value}", style=style, markup=False, highlight=False)
             return None
 
         if action.kind in ("login", "logout"):
             if action.kind == "login":
                 # The browser flow blocks the REPL until consent comes back,
                 # so say so before disappearing into it.
-                console.print(f"  {action.argument}: opening a browser to authorize…", style=MCP_INFO)
+                console.print(
+                    f"  {action.argument}: opening a browser to authorize…",
+                    style=MCP_INFO,
+                    markup=False,
+                    highlight=False,
+                )
                 status = await manager.login(action.argument)
             else:
                 status = await manager.logout(action.argument)
@@ -113,7 +118,9 @@ async def run_mcp_action(action: McpAction, manager, console) -> str | None:
             command, _, rest = action.argument.partition(" ")
             found = manager.find_prompt(command)
             if found is None:
-                console.print(f"  unknown MCP prompt command: {command}", style=MCP_ERROR)
+                console.print(
+                    f"  unknown MCP prompt command: {command}", style=MCP_ERROR, markup=False, highlight=False
+                )
                 return None
             server, prompt = found
             arguments = _map_prompt_arguments(rest.split(), prompt.arguments)
@@ -616,17 +623,19 @@ class CommandHandler:
             self.console.print(
                 f"  unknown /mcp subcommand: {sub} — try /mcp, /mcp reconnect <name>, /mcp login|logout <name>",
                 style=MCP_ERROR,
+                markup=False,
+                highlight=False,
             )
             return None
 
         name = parts[1].strip().split()[0] if len(parts) > 1 and parts[1].strip() else ""
         if not name:
-            self.console.print(f"  usage: /mcp {sub} <name>", style=MCP_ERROR)
+            self.console.print(f"  usage: /mcp {sub} <name>", style=MCP_ERROR, markup=False, highlight=False)
             return None
 
         known = {status.name for status in manager.statuses()}
         if name not in known:
-            self.console.print(f"  unknown MCP server: {name}", style=MCP_ERROR)
+            self.console.print(f"  unknown MCP server: {name}", style=MCP_ERROR, markup=False, highlight=False)
             return None
         return McpAction(sub, name)
 
@@ -669,7 +678,9 @@ class CommandHandler:
         manager = get_mcp_manager()
         command = text.split(None, 1)[0]
         if manager.find_prompt(command) is None:
-            self.console.print(f"  unknown MCP prompt command: {command}", style=MCP_ERROR)
+            self.console.print(
+                f"  unknown MCP prompt command: {command}", style=MCP_ERROR, markup=False, highlight=False
+            )
             prompts = manager.prompt_commands()
             if prompts:
                 self.console.print("  available:", style=MCP_INFO)

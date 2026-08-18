@@ -15,13 +15,7 @@ one-directional.
 from langchain_core.tools import tool
 
 from ..meta.attachments import attach_image
-
-
-def _read_field(value, name, default=None):
-    """Read an attribute or dict key, tolerating either shape."""
-    if isinstance(value, dict):
-        return value.get(name, default)
-    return getattr(value, name, default)
+from .utils import read_field as _read_field
 
 
 def _serialize_resource_content(item, *, server: str, parts: list[str]) -> None:

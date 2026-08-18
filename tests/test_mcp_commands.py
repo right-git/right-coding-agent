@@ -104,6 +104,20 @@ class TestMcpCommand(unittest.TestCase):
         self.assertIsNone(self.handler.handle("/mcp__nope__x"))
         self.assertIn("[weird]tag[/mismatch]", self.output())
 
+    def test_mcp_reconnect_with_bracketed_server_name_does_not_raise(self):
+        # A name containing "[/x]" looks like a rich closing tag; the
+        # "unknown MCP server" print must not parse it as markup.
+        self.assertIsNone(self.handler.handle("/mcp reconnect [/x]"))
+        self.assertIn("unknown MCP server", self.output())
+
+    def test_mcp_unknown_subcommand_with_brackets_does_not_raise(self):
+        self.assertIsNone(self.handler.handle("/mcp bad[/x]"))
+        self.assertIn("unknown /mcp subcommand", self.output())
+
+    def test_mcp_prompt_command_with_brackets_does_not_raise(self):
+        self.assertIsNone(self.handler.handle("/mcp__nope[/x]__y"))
+        self.assertIn("unknown MCP prompt command", self.output())
+
 
 class TestRunMcpAction(unittest.TestCase):
     def setUp(self):

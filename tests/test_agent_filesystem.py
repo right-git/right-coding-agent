@@ -112,9 +112,19 @@ class ToolContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(os.getcwd(), prompt)
         self.assertIn("tools are registered", prompt)
 
+    def _reset_frozen_tool_count(self):
+        # `_tool_count`/`_tool_count_frozen` are process-wide, frozen on
+        # first use like `_session_start`; reset around these tests so their
+        # assertions don't depend on what other tests froze first.
+        self.addCleanup(setattr, Prompts, "_tool_count", Prompts._tool_count)
+        self.addCleanup(setattr, Prompts, "_tool_count_frozen", Prompts._tool_count_frozen)
+        Prompts._tool_count = None
+        Prompts._tool_count_frozen = False
+
     def test_session_context_is_stable_across_calls(self):
         # The system prompt heads the provider prompt-cache prefix, so the
         # context paragraph must not change between a session's turns.
+        self._reset_frozen_tool_count()
         first = Prompts.session_context(tool_count=5)
         second = Prompts.session_context(tool_count=5)
 
@@ -123,6 +133,20 @@ class ToolContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("epoch", first)
         self.assertIn("now()", first)
         self.assertIn("5 tools are registered", first)
+
+    def test_session_context_freezes_tool_count_on_first_call(self):
+        # The registry is dynamic (MCP servers register/unregister tools at
+        # runtime), so a per-turn tool_count would flip the system prompt —
+        # the head of the provider prompt-cache prefix — between turns.
+        # session_context must freeze the count on its first call, the same
+        # way it freezes the session start time.
+        self._reset_frozen_tool_count()
+        first = Prompts.session_context(tool_count=3)
+        second = Prompts.session_context(tool_count=99)
+
+        self.assertEqual(first, second)
+        self.assertIn("3 tools are registered", first)
+        self.assertNotIn("99 tools are registered", second)
 
     CORE_PROMPT_TOOLS = (
         "bash",

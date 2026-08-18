@@ -81,6 +81,13 @@ def read_raw_entries(file: Path) -> dict[str, dict]:
     return servers if isinstance(servers, dict) else {}
 
 
+_RESERVED_KEY_HINTS = {
+    "transport": 'use "type", not "transport"',
+    "name": "the server name is given separately, not as a field in the entry",
+    "scope": "the scope is given separately (e.g. --scope), not as a field in the entry",
+}
+
+
 def config_from_entry(name: str, entry: dict, scope: str) -> McpServerConfig:
     """Build a config from a raw on-disk-shaped entry (`type` maps to `transport`).
 
@@ -88,8 +95,18 @@ def config_from_entry(name: str, entry: dict, scope: str) -> McpServerConfig:
     command (raw, no expansion — placeholders stay placeholders until load
     time); raises on an invalid entry rather than swallowing, so callers
     that want "skip and warn" do that themselves (see `_parse_entry`).
+
+    `name`/`transport`/`scope` are passed explicitly below, so an entry that
+    also carries one of those keys (as users naturally do — "transport" is
+    the intuitive name for what the on-disk shape calls "type") would
+    otherwise raise a raw TypeError from the double keyword argument;
+    reject those with a clear `ValueError` instead.
     """
     payload = dict(entry)
+    reserved = [key for key in _RESERVED_KEY_HINTS if key in payload]
+    if reserved:
+        hints = "; ".join(f'"{key}": {_RESERVED_KEY_HINTS[key]}' for key in reserved)
+        raise ValueError(f"entry must not set reserved field(s) {reserved} — {hints}")
     transport = payload.pop("type", None) or ("stdio" if payload.get("command") else "http")
     return McpServerConfig(name=name, transport=transport, scope=scope, **payload)
 

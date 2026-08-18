@@ -33,6 +33,7 @@ from .adapter import build_mcp_tool, build_prompt_command
 from .config import McpServerConfig, load_mcp_servers
 from .oauth import CALLBACK_TIMEOUT, NeedsInteractiveAuth, build_oauth_provider, clear_tokens, has_stored_tokens
 from .transports import default_session_factory
+from .utils import read_field as _read_field
 
 # A stopping connection gets this long to unwind its contexts before it is
 # cancelled outright — a wedged stdio child must never hold up REPL exit.
@@ -109,13 +110,6 @@ def _first_sentence(text: str) -> str:
     normalized = " ".join((text or "").split())
     head, separator, _ = normalized.partition(". ")
     return f"{head}." if separator else normalized
-
-
-def _read_field(value: Any, name: str, default=None):
-    """Read an attribute or dict key, tolerating either shape."""
-    if isinstance(value, dict):
-        return value.get(name, default)
-    return getattr(value, name, default)
 
 
 def _walk(error: BaseException | None, depth: int = 8):

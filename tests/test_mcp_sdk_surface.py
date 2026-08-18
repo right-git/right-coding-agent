@@ -40,6 +40,13 @@ class TestMcpSdkSurface(unittest.TestCase):
             OAuthToken,
         )
 
+    def test_private_http_client_factory_exists(self):
+        # transports.py depends on this private path (mcp.shared._httpx_utils
+        # is not part of the SDK's public surface); an SDK upgrade that moves
+        # or renames it must fail HERE, not at REPL startup when a server
+        # first tries to connect over http/sse.
+        from mcp.shared._httpx_utils import create_mcp_http_client  # noqa: F401
+
 
 if __name__ == "__main__":
     unittest.main()

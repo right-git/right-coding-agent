@@ -68,6 +68,8 @@ your tools and summarize the outcome in a sentence or two.
 """
 
     _session_start: datetime | None = None
+    _tool_count: int | None = None
+    _tool_count_frozen: bool = False
 
     @classmethod
     def session_context(cls, tool_count: int | None = None) -> str:
@@ -79,9 +81,20 @@ your tools and summarize the outcome in a sentence or two.
         the whole cache on every call. The start time is therefore frozen on
         first use — its epoch is included so scripts can compute the exact
         current time from the now() builtin.
+
+        The tool count is frozen the same way, on first call: the registry
+        is dynamic (MCP servers register/unregister tools at runtime), so
+        without this a per-turn count would flip the system prompt between
+        turns and invalidate the whole cached prefix. A dedicated
+        `_tool_count_frozen` flag (rather than treating `_tool_count is
+        None` as "unset") lets the first real call legitimately freeze a
+        count of 0.
         """
         if cls._session_start is None:
             cls._session_start = datetime.now()
+        if not cls._tool_count_frozen:
+            cls._tool_count = tool_count
+            cls._tool_count_frozen = True
         started = cls._session_start
         system = {"darwin": "macOS", "win32": "Windows"}.get(sys.platform, "Linux")
         sentences = [
@@ -92,8 +105,8 @@ your tools and summarize the outcome in a sentence or two.
             f" time (epoch {int(started.timestamp())}); now() inside a"
             " script returns the current epoch seconds.",
         ]
-        if tool_count:
-            sentences.append(f"{tool_count} tools are registered and available.")
+        if cls._tool_count:
+            sentences.append(f"{cls._tool_count} tools are registered and available.")
         return " ".join(sentences) + "\n\n"
 
     @classmethod

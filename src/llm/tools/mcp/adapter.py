@@ -18,6 +18,7 @@ from langchain_core.tools import StructuredTool
 from src.config.logging import logger
 
 from ..meta.attachments import attach_image
+from .utils import read_field as _read_field
 
 _HASH_LENGTH = 8
 MAX_TOOL_NAME_LENGTH = 64
@@ -199,13 +200,6 @@ def normalize_tool_arguments(arguments: dict, input_schema: dict | None) -> dict
         schema_type = _schema_type(schema)
         normalized[field_name] = _normalize_scalar(value, schema_type)
     return normalized
-
-
-def _read_field(value: Any, field_name: str, default=None):
-    """Read an attribute or dict key, tolerating either shape."""
-    if isinstance(value, dict):
-        return value.get(field_name, default)
-    return getattr(value, field_name, default)
 
 
 def _serialize_content_item(item: Any, *, server: str, tool_name: str, parts: list[str]) -> None:

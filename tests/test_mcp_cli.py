@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -81,6 +83,27 @@ class TestCliCommands(unittest.TestCase):
         self.project.write_text(bad_json, encoding="utf-8")
         self.assertEqual(cli.run_mcp_cli(["add", "x", "--", "cmd"]), 1)
         self.assertEqual(self.project.read_text(encoding="utf-8"), bad_json)
+
+    def test_add_json_rejects_reserved_transport_key(self):
+        # Users naturally write "transport" (the CLI flag's name) instead of
+        # the on-disk "type" field; this must raise ValueError -> exit 1
+        # with a hint, not a raw TypeError from a duplicate keyword arg.
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = cli.run_mcp_cli(["add-json", "srv", '{"transport": "http", "url": "https://x/"}'])
+        self.assertEqual(code, 1)
+        printed = buf.getvalue()
+        self.assertIn("transport", printed)
+        self.assertIn('"type"', printed)
+        self.assertEqual(load_mcp_servers(project_file=self.project, user_file=self.user, env={}), {})
+
+    def test_add_json_rejects_reserved_name_key(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = cli.run_mcp_cli(["add-json", "srv", '{"name": "other", "command": "npx"}'])
+        self.assertEqual(code, 1)
+        self.assertIn("name", buf.getvalue())
+        self.assertEqual(load_mcp_servers(project_file=self.project, user_file=self.user, env={}), {})
 
 
 if __name__ == "__main__":

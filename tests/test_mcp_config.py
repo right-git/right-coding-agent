@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.llm.tools.mcp.config import (
     add_server,
+    config_from_entry,
     expand_env,
     load_mcp_servers,
     project_config_path,
@@ -77,6 +78,39 @@ class TestLoadMcpServers(unittest.TestCase):
         write_json(self.project, {"mcpServers": {"bad": {"type": "http"}, "ok": {"command": "x"}}})
         servers = load_mcp_servers(project_file=self.project, user_file=self.user, env={})
         self.assertEqual(list(servers), ["ok"])
+
+    def test_entry_with_reserved_transport_key_is_skipped_not_fatal(self):
+        # Users naturally write "transport" instead of the on-disk "type"
+        # field; the load path must keep its existing "skip and warn"
+        # behavior rather than blowing up the whole load.
+        write_json(
+            self.project,
+            {"mcpServers": {"bad": {"transport": "http", "url": "https://x/"}, "ok": {"command": "x"}}},
+        )
+        servers = load_mcp_servers(project_file=self.project, user_file=self.user, env={})
+        self.assertEqual(list(servers), ["ok"])
+
+
+class TestConfigFromEntry(unittest.TestCase):
+    def test_reserved_transport_key_raises_value_error_with_hint(self):
+        with self.assertRaises(ValueError) as ctx:
+            config_from_entry("srv", {"transport": "http", "url": "https://x/"}, "project")
+        message = str(ctx.exception)
+        self.assertIn("transport", message)
+        self.assertIn('"type"', message)
+
+    def test_reserved_name_key_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            config_from_entry("srv", {"name": "other", "command": "npx"}, "project")
+
+    def test_reserved_scope_key_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            config_from_entry("srv", {"scope": "user", "command": "npx"}, "project")
+
+    def test_plain_entry_still_builds(self):
+        config = config_from_entry("srv", {"command": "npx", "args": ["x"]}, "project")
+        self.assertEqual(config.transport, "stdio")
+        self.assertEqual(config.command, "npx")
 
 
 class TestPaths(unittest.TestCase):
