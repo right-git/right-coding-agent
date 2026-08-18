@@ -17,7 +17,7 @@ from src.llm.utils import (
     trim_incomplete_tool_calls,
 )
 from src.ui import ChatUI
-from src.ui.commands import McpAction, run_mcp_action
+from src.ui.commands import McpAction, SkillAction, run_mcp_action
 from src.ui.interrupt import InterruptPolicy, TurnCancelled
 
 # The startup model comes from .env (LLM_DEFAULT_MODEL); /model can switch
@@ -423,6 +423,16 @@ async def main():
     mcp_manager.on_status = lambda name, state: ui.set_model_status(f"mcp:{name}", _status_word(state))
     mcp_task = asyncio.create_task(mcp_manager.start())
 
+    from src.llm.tools.skills.store import get_skill_store, skills_startup_report, start_skill_store
+
+    try:
+        skill_store = start_skill_store()
+        notice = skills_startup_report(skill_store, auto_import=settings.skills_auto_import)
+        if notice:
+            ui.console.print(f"  {notice}", style="dim", markup=False, highlight=False)
+    except Exception:
+        logger.exception("Skill store startup failed")
+
     current_turn: dict = {"task": None}
     try:
         asyncio.get_running_loop().add_signal_handler(
@@ -438,6 +448,13 @@ async def main():
             if not user_content.strip():
                 continue
 
+            store = get_skill_store()
+            if store is not None:
+                try:
+                    store.refresh()
+                except Exception:
+                    logger.exception("Skill refresh failed")
+
             if catalog_task.done() and not ui.model_catalog:
                 ui.set_model_catalog(await catalog.models())
 
@@ -446,7 +463,9 @@ async def main():
                 if result == "clear":
                     messages = []
                 model = ui.model
-                if isinstance(result, McpAction):
+                if isinstance(result, SkillAction):
+                    user_content = result.text  # fall through into the turn below
+                elif isinstance(result, McpAction):
                     prompt_text = await run_mcp_action(result, mcp_manager, ui.console)
                     if prompt_text is None:
                         continue

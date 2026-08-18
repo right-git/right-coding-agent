@@ -72,6 +72,13 @@ async def main():
     logger.info("Started the DIRECT-architecture evaluation REPL")
 
     try:
+        from src.llm.tools.skills.store import start_skill_store
+
+        start_skill_store()
+    except Exception:
+        logger.exception("Skill store startup failed (evaluation)")
+
+    try:
         while True:
             user_content = await ui.get_input()
 

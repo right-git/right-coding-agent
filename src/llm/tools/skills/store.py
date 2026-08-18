@@ -177,3 +177,27 @@ def start_skill_store(cwd: Path | None = None) -> SkillStore:
     store.scan()
     set_skill_store(store)
     return store
+
+
+def skills_startup_report(
+    store: SkillStore, *, auto_import: bool, home: Path | None = None, repo_root: Path | None = None
+) -> str | None:
+    """The one-line startup notice: an import hint, an auto-import summary, or None."""
+    from .importer import default_foreign_sources, find_candidates, import_skills
+
+    home = home if home is not None else Path.home()
+    candidates = find_candidates(default_foreign_sources(home, repo_root), set(store.skills))
+    fresh = [candidate for candidate in candidates if not candidate.collides]
+    if not fresh:
+        return None
+    if not auto_import:
+        return f"found {len(fresh)} Claude Code/Codex skill(s) — /skills import to migrate them"
+    if store.user_dir is None:
+        return None
+    copied, _, failed = import_skills(candidates, store.user_dir, names=None)
+    if copied:
+        store.scan()
+    line = f"auto-imported {len(copied)} skill(s): {', '.join(copied)}" if copied else None
+    if failed:
+        line = (line or "skill auto-import") + f" — {len(failed)} failed (see logs.log)"
+    return line

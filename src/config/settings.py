@@ -72,6 +72,10 @@ class Settings(BaseSettings):
         default=43110,
         description="Localhost port for the MCP OAuth redirect callback.",
     )
+    skills_auto_import: bool = Field(
+        default=False,
+        description="Copy newly found Claude Code/Codex skills into ~/.right-agent/skills at startup.",
+    )
     fish_audio_api_key: str | None = Field(default=None, description="Fish Audio API key (planned cloud TTS).")
     fish_audio_tts_model: str = Field(default="s2.1-pro", description="Fish Audio TTS model name.")
     elevenlabs_api_key: str | None = Field(default=None, description="ElevenLabs API key (planned cloud TTS).")
