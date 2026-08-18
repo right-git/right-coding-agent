@@ -7,7 +7,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 
-from src.llm.history import RECAP_SKILLS_TOTAL_CHARS, compact_finished_turn  # noqa: E402
+from src.llm.history import (  # noqa: E402
+    RECAP_SKILLS_TOTAL_CHARS,
+    SKILL_DROP_NOTE_CHARS,
+    compact_finished_turn,
+)
 
 
 def turn_with_skills(skills: dict) -> list:
@@ -44,6 +48,25 @@ class TestSkillRecap(unittest.TestCase):
         result = compact_finished_turn(turn_with_skills({}))
         recap = next(m for m in result if isinstance(m, ToolMessage))
         self.assertNotIn("skill instructions", recap.content)
+
+    def test_many_dropped_skills_note_stays_bounded(self):
+        # keep1/keep2 alone consume the whole 16k total budget; the 30 small
+        # "extra" skills that follow must all be fully dropped once it's exhausted.
+        skills = {f"extra{i}": "z" * 100 for i in range(30)}
+        skills["keep2"] = "b" * 8000
+        skills["keep1"] = "a" * 8000  # last-inserted = processed first ("newest")
+        result = compact_finished_turn(turn_with_skills(skills))
+        recap = next(m for m in result if isinstance(m, ToolMessage))
+        section = recap.content.split("skill instructions (kept):", 1)[1]
+
+        # Bounded by the tracked per-skill budget plus at most one combined drop
+        # note — not one note per dropped skill. A little slack covers the
+        # "### skill: <name>" headers and block separators, which are formatting
+        # overhead the per-skill budget never counted against (true before this
+        # fix too) rather than something either budget is meant to bound.
+        formatting_slack = 200
+        self.assertLessEqual(len(section), RECAP_SKILLS_TOTAL_CHARS + SKILL_DROP_NOTE_CHARS + formatting_slack)
+        self.assertEqual(section.count("force=True"), 1)  # one combined note, not thirty
 
 
 if __name__ == "__main__":

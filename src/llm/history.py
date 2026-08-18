@@ -43,7 +43,13 @@ RECAP_RESULT_CHARS = 1_500
 RECAP_CONTRACT_CHARS = 6_000
 RECAP_SKILL_CHARS = 8_000
 RECAP_SKILLS_TOTAL_CHARS = 16_000
-SKILL_DROP_NOTE = "[skill '{slug}' body dropped from history — re-invoke skill__{slug}(force=True) to reload]"
+SKILL_DROP_NOTE_CHARS = 500  # hard cap on the one combined drop note, independent of how many skills it names
+_SKILL_CLIP_SUFFIX_RESERVE = 32  # headroom for _clip's own "… [+N chars]" suffix, generous for any real body size
+SKILL_TRUNCATE_NOTE = "[skill '{slug}' body truncated in history — re-invoke skill__{slug}(force=True) to reload]"
+SKILL_DROP_NOTE = (
+    "[skill bodies dropped from history, budget exhausted — "
+    "re-invoke skill__<slug>(force=True) to reload each: {slugs}]"
+)
 RESULT_SLICE_CHARS = 300
 SCRIPT_SEPARATOR = "\n# --- next script ---\n"
 CONTRACT_SEPARATOR = "\n\n---\n\n"
@@ -93,6 +99,27 @@ def _extract_skills(content: str) -> tuple[str, dict[str, str]]:
         return content, {}
     skills = {str(slug): str(body) for slug, body in payload.pop("skills").items() if str(body).strip()}
     return json.dumps(payload, ensure_ascii=False), skills
+
+
+def _clip_skill_body(body: str, budget: int, note: str) -> str:
+    """`body` clipped plus a trailing `note`, with the total held to `budget` chars.
+
+    `_clip`'s own "… [+N chars]" suffix makes its output longer than the
+    limit it was given, and appending a note on top of that (as the naive
+    "clip then append" approach did) can push a boundary skill's slice past
+    its share of the total budget. Room for both the suffix and the note is
+    reserved up front so the combined length never exceeds `budget`; when
+    `budget` is too small to fit any body content alongside the note, only a
+    hard-truncated slice of the note itself is kept (no further suffix, so
+    the bound still holds).
+    """
+    if budget <= 0:
+        return ""
+    reserve = len(note) + 1 + _SKILL_CLIP_SUFFIX_RESERVE
+    if budget <= reserve:
+        return note[:budget]
+    inner_limit = budget - reserve
+    return f"{_clip(body, inner_limit)}\n{note}"
 
 
 def _tail_bounds(messages: list) -> tuple[int, int] | None:
@@ -195,16 +222,23 @@ def compact_finished_turn(messages: list) -> list:
         )
     if skill_bodies:
         blocks: list[str] = []
+        dropped: list[str] = []
         remaining = RECAP_SKILLS_TOTAL_CHARS
         for slug, body in reversed(list(skill_bodies.items())):  # newest first
             if remaining <= 0:
-                blocks.append(SKILL_DROP_NOTE.format(slug=slug))
+                dropped.append(slug)  # collapsed into one bounded note below, not one note each
                 continue
-            kept = _clip(body, min(RECAP_SKILL_CHARS, remaining))
-            if len(kept) < len(body):
-                kept += "\n" + SKILL_DROP_NOTE.format(slug=slug).replace("dropped from", "truncated in")
+            slice_limit = min(RECAP_SKILL_CHARS, remaining)
+            if len(body) <= slice_limit:
+                kept = body
+            else:
+                kept = _clip_skill_body(body, slice_limit, SKILL_TRUNCATE_NOTE.format(slug=slug))
             remaining -= len(kept)
             blocks.append(f"### skill: {slug}\n{kept}")
+        if dropped:
+            # One note for every fully-dropped skill, hard-capped so it can never grow past
+            # SKILL_DROP_NOTE_CHARS regardless of how many skills were dropped.
+            blocks.append(SKILL_DROP_NOTE.format(slugs=", ".join(dropped))[:SKILL_DROP_NOTE_CHARS])
         digest += "\nskill instructions (kept):\n" + "\n\n".join(blocks)
     if result_slices:
         digest += "\nresults (trimmed):\n" + _clip("\n".join(result_slices), RECAP_RESULT_CHARS)
