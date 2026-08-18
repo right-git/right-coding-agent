@@ -41,6 +41,9 @@ from src.llm.middlewares.message_log import scrub_text
 RECAP_CODE_CHARS = 2_000
 RECAP_RESULT_CHARS = 1_500
 RECAP_CONTRACT_CHARS = 6_000
+RECAP_SKILL_CHARS = 8_000
+RECAP_SKILLS_TOTAL_CHARS = 16_000
+SKILL_DROP_NOTE = "[skill '{slug}' body dropped from history — re-invoke skill__{slug}(force=True) to reload]"
 RESULT_SLICE_CHARS = 300
 SCRIPT_SEPARATOR = "\n# --- next script ---\n"
 CONTRACT_SEPARATOR = "\n\n---\n\n"
@@ -74,6 +77,22 @@ def _extract_contracts(content: str) -> tuple[str, list[str]]:
         return content, []
     contracts = [str(item).strip() for item in payload.pop("contracts") if str(item).strip()]
     return json.dumps(payload, ensure_ascii=False), contracts
+
+
+def _extract_skills(content: str) -> tuple[str, dict[str, str]]:
+    """A run_tools result without its `skills` field, plus the skill bodies.
+
+    Skill bodies are durable instructions (the analog of contracts): the
+    recap carries them verbatim under budgets instead of trimming them into
+    the generic result slice."""
+    try:
+        payload = json.loads(content)
+    except ValueError:
+        return content, {}
+    if not isinstance(payload, dict) or not isinstance(payload.get("skills"), dict):
+        return content, {}
+    skills = {str(slug): str(body) for slug, body in payload.pop("skills").items() if str(body).strip()}
+    return json.dumps(payload, ensure_ascii=False), skills
 
 
 def _tail_bounds(messages: list) -> tuple[int, int] | None:
@@ -127,6 +146,7 @@ def compact_finished_turn(messages: list) -> list:
     image_messages: list[HumanMessage] = []
     result_slices: list[str] = []
     contracts: list[str] = []
+    skill_bodies: dict[str, str] = {}
 
     for message in tail:
         if isinstance(message, AIMessage) and message.tool_calls:
@@ -147,6 +167,10 @@ def compact_finished_turn(messages: list) -> list:
                 for contract in extracted:
                     if contract not in contracts:
                         contracts.append(contract)
+                content, extracted_skills = _extract_skills(content)
+                for slug, body in extracted_skills.items():
+                    skill_bodies.pop(slug, None)  # re-delivery moves it to newest
+                    skill_bodies[slug] = body
             preview = scrub_text(" ".join(content.split()), RESULT_SLICE_CHARS)
             if preview:
                 result_slices.append(f"- {name or 'tool'}: {preview}")
@@ -169,6 +193,19 @@ def compact_finished_turn(messages: list) -> list:
         digest += "\ntool contracts (kept — call get_tool only for tools not listed here):\n" + _clip(
             CONTRACT_SEPARATOR.join(contracts), RECAP_CONTRACT_CHARS
         )
+    if skill_bodies:
+        blocks: list[str] = []
+        remaining = RECAP_SKILLS_TOTAL_CHARS
+        for slug, body in reversed(list(skill_bodies.items())):  # newest first
+            if remaining <= 0:
+                blocks.append(SKILL_DROP_NOTE.format(slug=slug))
+                continue
+            kept = _clip(body, min(RECAP_SKILL_CHARS, remaining))
+            if len(kept) < len(body):
+                kept += "\n" + SKILL_DROP_NOTE.format(slug=slug).replace("dropped from", "truncated in")
+            remaining -= len(kept)
+            blocks.append(f"### skill: {slug}\n{kept}")
+        digest += "\nskill instructions (kept):\n" + "\n\n".join(blocks)
     if result_slices:
         digest += "\nresults (trimmed):\n" + _clip("\n".join(result_slices), RECAP_RESULT_CHARS)
 
