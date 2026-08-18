@@ -492,6 +492,10 @@ def cli_main() -> None:
         from src.llm.tools.mcp.cli import run_mcp_cli
 
         raise SystemExit(run_mcp_cli(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "skills":
+        from src.llm.tools.skills.cli import run_skills_cli
+
+        raise SystemExit(run_skills_cli(sys.argv[2:]))
     asyncio.run(main())
 
 
