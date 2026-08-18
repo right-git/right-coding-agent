@@ -60,6 +60,44 @@ LOGIN_CONNECT_TIMEOUT = CALLBACK_TIMEOUT + LOGIN_CONNECT_GRACE
 _UNAUTHORIZED_RE = re.compile(r"\b401\b")
 
 
+# Guards on `describe_error`: a cyclic or absurdly wide ExceptionGroup must
+# not turn one log line into a wall of text.
+_MAX_ERROR_DEPTH = 6
+_MAX_ERROR_LEAVES = 3
+
+
+def describe_error(error: BaseException) -> str:
+    """One line naming what actually failed, sub-exceptions included.
+
+    The transports run inside anyio task groups, so nearly every real failure
+    reaches us wrapped: `str(ExceptionGroup)` is the useless "unhandled errors
+    in a TaskGroup (1 sub-exception)", and the `OAuthTokenError` carrying the
+    server's own error body -- the only thing that says WHY -- is thrown away.
+    A Linear login failing on `invalid_request: Client must not use multiple
+    authentication methods` logged as "1 sub-exception" cost a whole debugging
+    session, so the leaves are spelled out here instead.
+    """
+    leaves: list[str] = []
+
+    def walk(current: BaseException, depth: int = 0) -> None:
+        if depth > _MAX_ERROR_DEPTH:
+            return
+        nested = getattr(current, "exceptions", None)
+        if isinstance(nested, (list, tuple)) and nested:
+            for child in nested:
+                walk(child, depth + 1)
+            return
+        text = str(current).strip() or type(current).__name__
+        entry = f"{type(current).__name__}: {text}"
+        if entry not in leaves:
+            leaves.append(entry)
+
+    walk(error)
+    if not leaves:
+        return str(error)
+    return "; ".join(leaves[:_MAX_ERROR_LEAVES])
+
+
 class ServerState(str, Enum):
     CONNECTING = "connecting"
     CONNECTED = "connected"
@@ -257,7 +295,7 @@ class McpManager:
         """The error text a failed connection reports."""
         if state == ServerState.NEEDS_AUTH:
             return f"needs auth — run /mcp login {config.name}"
-        return str(error)
+        return describe_error(error)
 
     # ----------------------------------------------------------- connection
 
@@ -356,7 +394,7 @@ class McpManager:
         except asyncio.CancelledError:
             raise
         except Exception as error:
-            logger.warning("MCP server [{}] failed: {}", conn.config.name, error)
+            logger.warning("MCP server [{}] failed: {}", conn.config.name, describe_error(error))
             if self._owns(conn):
                 state = self._failure_state(conn.config, error)
                 self._set_state(conn, state, self._failure_error(conn.config, state, error))

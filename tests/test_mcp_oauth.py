@@ -423,3 +423,40 @@ class TestBuildOAuthProvider(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTokenEndpointAuthMethod(unittest.TestCase):
+    """One auth method per token request; Linear 400s on two."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.config = McpServerConfig(name="remote", transport="http", url="https://r/mcp")
+        self.storage_ = FileTokenStorage(self.config.name, self.config.url, path=Path(self.tmp.name) / "t.json")
+
+    def context(self):
+        provider, _ = build_oauth_provider(self.config, interactive=False, storage=self.storage_, port=43110)
+        return provider.context
+
+    def test_registration_asks_for_client_secret_post(self):
+        self.assertEqual(self.context().client_metadata.token_endpoint_auth_method, "client_secret_post")
+
+    def test_token_request_carries_exactly_one_auth_method(self):
+        """The regression: Basic header AND `client_id` in the body is two."""
+        context = self.context()
+        context.client_info = OAuthClientInformationFull(
+            client_id="cid",
+            client_secret="secret",
+            redirect_uris=[u for u in context.client_metadata.redirect_uris],
+            token_endpoint_auth_method=context.client_metadata.token_endpoint_auth_method,
+        )
+        # Shaped like the SDK's own `_exchange_token_authorization_code`, which
+        # always seeds the body with `client_id`.
+        data, headers = context.prepare_token_auth(
+            {"grant_type": "authorization_code", "code": "abc", "client_id": "cid"},
+            {"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        in_header = "Authorization" in headers
+        in_body = "client_id" in data or "client_secret" in data
+        self.assertFalse(in_header and in_body, f"two auth methods: headers={headers}, data={data}")
+        self.assertTrue(in_body, "the client must still authenticate")

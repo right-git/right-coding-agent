@@ -116,3 +116,56 @@ class MainStartupTests(unittest.IsolatedAsyncioTestCase):
                 await main_module.main()
 
         ui.start_voice_input.assert_not_called()
+
+
+class McpActionCancellationTests(unittest.IsolatedAsyncioTestCase):
+    """`/mcp login` blocks on a browser; it must be interruptible like a turn."""
+
+    async def drive(self, run_cancellable):
+        from src import main as main_module
+        from src.ui.commands import McpAction
+
+        ui = Mock()
+        ui.model = "openai/gpt-5.1-codex-mini"
+        ui.get_input = AsyncMock(side_effect=["/mcp login linear", "/quit"])
+        ui.handle_command = Mock(side_effect=[McpAction("login", "linear"), SystemExit(0)])
+        ui.run_cancellable = run_cancellable
+
+        catalog = Mock()
+        catalog.models = AsyncMock(return_value={})
+
+        with (
+            patch("src.main.ChatUI", return_value=ui),
+            patch("src.main.OpenRouterCatalog", return_value=catalog),
+            patch("src.main.preload_vision_model"),
+            patch("src.llm.tools.computer.set_activity_listener"),
+            patch("src.llm.agents.Agents") as agents_cls,
+            patch("src.main.run_mcp_action", new=AsyncMock(return_value=None)) as action,
+        ):
+            agents_cls.return_value = Mock()
+            with self.assertRaises(SystemExit):
+                await main_module.main()
+        return ui, action
+
+    async def test_the_action_runs_under_the_escape_watcher(self):
+        awaited = []
+
+        async def run_cancellable(coroutine, watcher=None):
+            awaited.append(coroutine)
+            return await coroutine
+
+        ui, action = await self.drive(run_cancellable)
+        action.assert_awaited_once()
+        self.assertEqual(len(awaited), 1, "the MCP action bypassed run_cancellable")
+
+    async def test_cancelling_returns_to_the_prompt_instead_of_killing_the_repl(self):
+        from src.ui.interrupt import TurnCancelled
+
+        async def run_cancellable(coroutine, watcher=None):
+            coroutine.cancel()
+            raise TurnCancelled()
+
+        ui, _ = await self.drive(run_cancellable)
+        # Two prompts served: the cancel fell through to the next input.
+        self.assertEqual(ui.get_input.await_count, 2)
+        ui.print_warning.assert_any_call("cancelled")

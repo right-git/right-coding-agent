@@ -373,6 +373,19 @@ def build_oauth_provider(
                 redirect_uris=[redirect_uri],
                 grant_types=["authorization_code", "refresh_token"],
                 response_types=["code"],
+                # Pinned, not left to the server's choice. The SDK always puts
+                # `client_id` in the token-request body (oauth2.py, both the
+                # code exchange and the refresh), and its `client_secret_basic`
+                # branch strips only `client_secret` from that body while
+                # adding an `Authorization: Basic` header -- so a registration
+                # that came back as `client_secret_basic` sends TWO auth
+                # methods, and RFC 6749 s2.3 says a client MUST NOT. Cloudflare
+                # `workers-oauth-provider` servers enforce it: Linear answered
+                # the exchange 400 `invalid_request: Client must not use
+                # multiple authentication methods` (mcp.sentry.dev is the same
+                # stack). `client_secret_post` keeps the credential and adds no
+                # header, so exactly one method goes out.
+                token_endpoint_auth_method="client_secret_post",
             ),
             storage=storage,
             redirect_handler=redirect_handler,

@@ -447,7 +447,21 @@ async def main():
                     messages = []
                 model = ui.model
                 if isinstance(result, McpAction):
-                    prompt_text = await run_mcp_action(result, mcp_manager, ui.console)
+                    # Run it the way a turn runs: `/mcp login` blocks on the
+                    # browser for up to CALLBACK_TIMEOUT, and awaiting it
+                    # straight from the loop left no way out -- Esc needs the
+                    # watcher `run_cancellable` installs, and the SIGINT
+                    # handler cancels `current_turn["task"]`, which was empty
+                    # here, so Ctrl+C could only force-quit the process.
+                    action = asyncio.ensure_future(run_mcp_action(result, mcp_manager, ui.console))
+                    current_turn["task"] = action
+                    try:
+                        prompt_text = await ui.run_cancellable(action)
+                    except (TurnCancelled, asyncio.CancelledError):
+                        ui.print_warning("cancelled")
+                        continue
+                    finally:
+                        current_turn["task"] = None
                     if prompt_text is None:
                         continue
                     user_content = prompt_text  # fall through into the turn below

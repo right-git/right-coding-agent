@@ -775,3 +775,24 @@ class TestDefaultSessionFactory(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DescribeErrorTests(unittest.TestCase):
+    """A TaskGroup wrapper must not hide the failure it carries."""
+
+    def test_exception_group_reports_its_leaf(self):
+        from src.llm.tools.mcp.manager import describe_error
+
+        group = ExceptionGroup("unhandled errors in a TaskGroup", [ValueError("Token exchange failed (400)")])
+        self.assertEqual(describe_error(group), "ValueError: Token exchange failed (400)")
+
+    def test_nested_groups_are_flattened_and_deduped(self):
+        from src.llm.tools.mcp.manager import describe_error
+
+        inner = ExceptionGroup("inner", [RuntimeError("boom"), RuntimeError("boom")])
+        self.assertEqual(describe_error(ExceptionGroup("outer", [inner])), "RuntimeError: boom")
+
+    def test_a_plain_exception_is_unchanged(self):
+        from src.llm.tools.mcp.manager import describe_error
+
+        self.assertEqual(describe_error(ValueError("plain")), "ValueError: plain")
