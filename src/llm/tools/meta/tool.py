@@ -27,7 +27,7 @@ from src.config.logging import logger
 from ...statistics.script_calls import counting_script_calls
 from .attachments import collecting_images
 from .defaults import get_registry
-from .registry import ToolRegistry
+from .registry import SEARCH_LIMIT, ToolRegistry
 from .sandbox import Interpreter
 
 MAX_RESULT_CHARS = 40_000
@@ -78,29 +78,87 @@ def _lookup_contract(registry: ToolRegistry, name: str) -> tuple[str | None, str
     return None, f"Unknown tool: {name!r}. Closest matches:\n{listed}"
 
 
-async def search_tools(query: str, only_mcp: bool = False) -> str:
+# A server with more matches than this collapses into one aggregate line —
+# with several MCP servers connected a flat listing would drown the core
+# tools, and 21 Playwright tools once ate the whole result.
+MCP_GROUP_THRESHOLD = 3
+# Drill-in listings (server="...") are the model explicitly asking for one
+# server's catalogue, so they get room to show all of it.
+SERVER_LIST_LIMIT = 50
+_SEARCH_GUIDANCE = (
+    "Call a tool straight away when its signature is self-explanatory; "
+    "fetch full contracts with get_tool([...]) — several names at once — for the rest."
+)
+
+
+def _server_listing(registry: ToolRegistry, query: str, server: str) -> str:
+    """The drill-in view: one MCP server's tools, generously sized."""
+    known = registry.mcp_servers()
+    if server not in known:
+        listed = ", ".join(known) if known else "none are connected"
+        return f"Unknown MCP server '{server}'. Known servers: {listed}."
+    matches = registry.search_all(query, source=f"mcp:{server}")
+    if not matches:
+        return (
+            f"No tools of MCP server '{server}' match {query!r}; "
+            f'search_tools("", server="{server}") lists all of them.'
+        )
+    shown = matches[:SERVER_LIST_LIMIT]
+    header = (
+        f"Tools of MCP server '{server}' matching {query!r}:"
+        if query.split()
+        else f"All {len(matches)} tools of MCP server '{server}':"
+    )
+    lines = [header, *(registry.brief(match) for match in shown)]
+    if len(matches) > len(shown):
+        lines.append(f"… and {len(matches) - len(shown)} more — refine the query")
+    lines.append(_SEARCH_GUIDANCE)
+    return "\n".join(lines)
+
+
+async def search_tools(query: str, only_mcp: bool = False, server: str = "") -> str:
     """Keyword search over the registry; one `signature — summary` per line.
 
     Callable from inside run_tools scripts (and directly as a library
     function). When nothing matches, the full catalogue is listed instead.
+    MCP servers with many matches collapse into one aggregate line; the
+    `server` parameter drills into a single server's catalogue.
     """
     registry = get_registry()
+    if server:
+        return _server_listing(registry, query, server)
     source_prefix = "mcp:" if only_mcp else None
-    matches = registry.search(query, source_prefix=source_prefix)
-    header = f"Tools matching {query!r}:"
-    if not matches:
-        matches = registry.all_tools(source_prefix=source_prefix)
+    matches = registry.search_all(query, source_prefix=source_prefix)
+    header = f"Tools matching {query!r}:" if query.split() else "Every registered tool:"
+    if not matches and query.split():
+        matches = registry.search_all("", source_prefix=source_prefix)
         header = f"Nothing matched {query!r}; every registered tool:"
     if not matches:
         return "No MCP tools are registered." if only_mcp else "No tools are registered."
-    return "\n".join(
-        [
-            header,
-            *(registry.brief(match) for match in matches),
-            "Call a tool straight away when its signature is self-explanatory; "
-            "fetch full contracts with get_tool([...]) — several names at once — for the rest.",
-        ]
-    )
+
+    native = [match for match in matches if registry.mcp_server_of(match.name) is None]
+    by_server: dict[str, list] = {}
+    for match in matches:
+        server_name = registry.mcp_server_of(match.name)
+        if server_name is not None:
+            by_server.setdefault(server_name, []).append(match)
+
+    lines = [header]
+    shown_native = native[:SEARCH_LIMIT]
+    lines.extend(registry.brief(match) for match in shown_native)
+    hidden_native = len(native) - len(shown_native)
+    if hidden_native:
+        lines.append(f"… and {hidden_native} more matching tools — refine the query")
+    for server_name, server_tools in sorted(by_server.items(), key=lambda pair: (-len(pair[1]), pair[0])):
+        if len(server_tools) <= MCP_GROUP_THRESHOLD:
+            lines.extend(registry.brief(match) for match in server_tools)
+        else:
+            lines.append(
+                f"MCP server '{server_name}': {len(server_tools)} matching tools — "
+                f'search_tools({query!r}, server="{server_name}") lists them'
+            )
+    lines.append(_SEARCH_GUIDANCE)
+    return "\n".join(lines)
 
 
 async def get_tool(names: list[str] | str) -> str:
@@ -162,12 +220,17 @@ async def run_tools(code: str) -> tuple[str, list[dict]]:
     This is your only wired-in tool; every capability (the web, files, the
     shell, the user's screen, ...) is a registered tool your script calls
     by bare name. Discovery happens in-script too:
-    search_tools("a few keywords", only_mcp=False) returns matching tools one
-    per line as `signature — summary`, and get_tool(["name", ...]) fetches
+    search_tools("a few keywords", only_mcp=False, server="") returns
+    matching tools one per line as `signature — summary`, and
+    get_tool(["name", ...]) fetches
     full contracts — they arrive in this result's `contracts` field
     automatically, so call it as a bare statement and never print or return
     its value. Tools provided by connected MCP servers are listed with an
-    [MCP: <server>] marker; pass only_mcp=True to browse only those. A
+    [MCP: <server>] marker; pass only_mcp=True to browse only those. An MCP
+    server with many matches collapses into one summary line with its match
+    count — drill in with search_tools("query", server="thatname"), and
+    search_tools("", server="thatname") lists that server's whole
+    catalogue. A
     listing line's signature is often all you need — call such a tool right
     away, and reach for get_tool only when the arguments need more detail
     than the signature shows. A contract fetched by a script cannot steer

@@ -25,3 +25,4 @@ models/
 # Claude worktrees and SDD scratch
 .claude/worktrees/
 .superpowers/
+.playwright-mcp/

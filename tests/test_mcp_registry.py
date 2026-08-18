@@ -81,3 +81,77 @@ class TestSearchToolsOnlyMcp(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def make_tool(name: str, description: str):
+    """A minimal StructuredTool with a one-arg dict schema, for bulk fixtures."""
+    from langchain_core.tools import StructuredTool
+
+    async def run(**kwargs):
+        return "ok"
+
+    return StructuredTool(
+        name=name,
+        description=description,
+        args_schema={"type": "object", "properties": {"x": {"type": "string"}}},
+        coroutine=run,
+    )
+
+
+class TestGroupedMcpDiscovery(unittest.TestCase):
+    """Big MCP servers collapse to one aggregate line; server= drills in."""
+
+    def setUp(self):
+        registry = ToolRegistry()
+        registry.register(make_tool("web_fetch", "Fetch a browser page."))
+        for i in range(5):
+            registry.register(make_tool(f"mcp__pw__browser_{i}", f"Browser action {i}."), source="mcp:pw")
+        registry.register(make_tool("mcp__tiny__browser_open", "Open a browser."), source="mcp:tiny")
+        set_registry(registry)
+        self.addCleanup(set_registry, None)
+
+    def listing(self, *args, **kwargs):
+        return asyncio.run(search_tools(*args, **kwargs))
+
+    def test_big_server_collapses_to_aggregate_line(self):
+        out = self.listing("browser")
+        self.assertIn("web_fetch", out)
+        self.assertIn("MCP server 'pw': 5 matching tools", out)
+        self.assertIn('server="pw"', out)
+        self.assertNotIn("mcp__pw__browser_0", out)
+
+    def test_small_server_stays_inline(self):
+        out = self.listing("browser")
+        self.assertIn("mcp__tiny__browser_open", out)
+
+    def test_server_param_lists_everything_ungrouped(self):
+        out = self.listing("", server="pw")
+        for i in range(5):
+            self.assertIn(f"mcp__pw__browser_{i}", out)
+        self.assertNotIn("matching tools", out)
+
+    def test_server_param_with_query_filters(self):
+        out = self.listing("action 3", server="pw")
+        self.assertIn("mcp__pw__browser_3", out)
+
+    def test_unknown_server_lists_known_ones(self):
+        out = self.listing("browser", server="nope")
+        self.assertIn("Unknown MCP server 'nope'", out)
+        self.assertIn("pw", out)
+        self.assertIn("tiny", out)
+
+    def test_empty_query_groups_instead_of_truncating_silently(self):
+        out = self.listing("")
+        self.assertIn("MCP server 'pw': 5", out)
+        self.assertIn("web_fetch", out)
+
+
+class TestTruncationHint(unittest.TestCase):
+    def test_long_native_listing_reports_hidden_count(self):
+        registry = ToolRegistry()
+        for i in range(12):
+            registry.register(make_tool(f"native_probe_{i}", "A probing helper."))
+        set_registry(registry)
+        self.addCleanup(set_registry, None)
+        out = asyncio.run(search_tools("probing"))
+        self.assertIn("4 more", out)

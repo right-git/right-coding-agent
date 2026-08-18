@@ -397,8 +397,14 @@ class DefaultRegistryTests(unittest.TestCase):
         from unittest.mock import patch
 
         from src.config.settings import settings
+        from src.llm.tools.meta import defaults
 
-        with patch.object(settings, "enable_vision_model", True):
+        # _mcp_servers_configured reads the developer's real MCP config; pin
+        # it off so this listing does not depend on the machine's ~/.right-agent.
+        with (
+            patch.object(settings, "enable_vision_model", True),
+            patch.object(defaults, "_mcp_servers_configured", return_value=False),
+        ):
             names = [tool_obj.name for tool_obj in get_registry().all_tools()]
 
         self.assertEqual(

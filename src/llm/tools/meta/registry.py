@@ -128,13 +128,30 @@ class ToolRegistry:
 
     def search(self, query: str, limit: int = SEARCH_LIMIT, source_prefix: str | None = None) -> list[BaseTool]:
         """Keyword search over names and descriptions, best matches first."""
-        terms = [term for term in query.casefold().split() if term]
-        if not terms:
-            return self.all_tools(source_prefix=source_prefix)[:limit]
+        return self.search_all(query, source_prefix=source_prefix)[:limit]
 
+    def search_all(
+        self,
+        query: str,
+        source_prefix: str | None = None,
+        source: str | None = None,
+    ) -> list[BaseTool]:
+        """Every match, unlimited — callers decide how to truncate or group.
+
+        `source` filters to an exact origin label ("mcp:pw"), `source_prefix`
+        to a label family ("mcp:"); an empty query matches everything that
+        passes the filters.
+        """
+        terms = [term for term in query.casefold().split() if term]
         scored: list[tuple[int, BaseTool]] = []
         for tool_obj in self._tools.values():
-            if source_prefix is not None and not (self._sources.get(tool_obj.name) or "").startswith(source_prefix):
+            tool_source = self._sources.get(tool_obj.name) or ""
+            if source_prefix is not None and not tool_source.startswith(source_prefix):
+                continue
+            if source is not None and tool_source != source:
+                continue
+            if not terms:
+                scored.append((0, tool_obj))
                 continue
             name = tool_obj.name.casefold()
             description = (tool_obj.description or "").casefold()
@@ -146,9 +163,25 @@ class ToolRegistry:
                     score += 1
             if score:
                 scored.append((score, tool_obj))
-
         scored.sort(key=lambda pair: (-pair[0], pair[1].name))
-        return [tool_obj for _, tool_obj in scored[:limit]]
+        return [tool_obj for _, tool_obj in scored]
+
+    def mcp_servers(self) -> list[str]:
+        """Names of MCP servers with at least one registered tool, sorted."""
+        return sorted(
+            {
+                source[len(MCP_SOURCE_PREFIX) :]
+                for source in self._sources.values()
+                if source.startswith(MCP_SOURCE_PREFIX)
+            }
+        )
+
+    def mcp_server_of(self, name: str) -> str | None:
+        """The MCP server a tool came from, or None for native tools."""
+        source = self._sources.get(name) or ""
+        if source.startswith(MCP_SOURCE_PREFIX):
+            return source[len(MCP_SOURCE_PREFIX) :]
+        return None
 
     def signature(self, tool_obj: BaseTool) -> str:
         parts = []

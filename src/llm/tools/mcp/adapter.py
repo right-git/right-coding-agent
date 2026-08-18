@@ -202,11 +202,52 @@ def normalize_tool_arguments(arguments: dict, input_schema: dict | None) -> dict
     return normalized
 
 
+# Servers like Playwright save screenshots to disk and answer with ONLY a
+# markdown link — no image content block — leaving the model blind to its
+# own screenshot. Links to local image files are therefore read and pushed
+# through the attachment channel, bounded so a huge capture cannot blow up
+# the request.
+MAX_LINKED_IMAGE_BYTES = 5 * 1024 * 1024
+_IMAGE_LINK_RE = re.compile(r"\(([^()\s]+\.(?:png|jpe?g|webp|gif))\)", re.IGNORECASE)
+_IMAGE_MIMES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+}
+
+
+def _attach_linked_images(text: str, *, server: str, tool_name: str) -> str:
+    """Attach local image files referenced by markdown links in a text result."""
+    import base64
+    from pathlib import Path
+
+    attached = 0
+    for raw_path in _IMAGE_LINK_RE.findall(text):
+        try:
+            path = Path(raw_path).expanduser()
+            if not path.is_file() or path.stat().st_size > MAX_LINKED_IMAGE_BYTES:
+                continue
+            mime = _IMAGE_MIMES.get(path.suffix.lower())
+            if mime is None:
+                continue
+            data = base64.b64encode(path.read_bytes()).decode()
+            if attach_image(data, mime, label=f"{server}:{tool_name}"):
+                attached += 1
+        except Exception:
+            logger.exception("Failed to attach linked image [{}]", raw_path)
+    if attached:
+        text += f"\n[{attached} linked image file(s) attached — you will see them right after this result]"
+    return text
+
+
 def _serialize_content_item(item: Any, *, server: str, tool_name: str, parts: list[str]) -> None:
     """Render one MCP content block into `parts`, routing images out of band."""
     item_type = _read_field(item, "type")
     if item_type == "text":
-        parts.append(str(_read_field(item, "text", "")))
+        text = str(_read_field(item, "text", ""))
+        parts.append(_attach_linked_images(text, server=server, tool_name=tool_name))
         return
     if item_type == "image":
         data = _read_field(item, "data", "") or ""

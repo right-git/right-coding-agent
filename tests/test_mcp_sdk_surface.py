@@ -40,6 +40,31 @@ class TestMcpSdkSurface(unittest.TestCase):
             OAuthToken,
         )
 
+    def test_model_field_names_the_adapter_reads(self):
+        # SDK 2.0 exposes snake_case attributes for the wire format's
+        # camelCase fields; utils.read_field retries the snake spelling on a
+        # camelCase miss. If an upgrade renames these again, fail HERE with
+        # the exact field, not in production with silently-empty schemas
+        # (that shipped once: every real tool registered with no arguments).
+        from mcp import types
+
+        expectations = {
+            "Tool": {"name", "description", "input_schema", "annotations"},
+            "CallToolResult": {"content", "structured_content", "is_error"},
+            "ImageContent": {"type", "data", "mime_type"},
+            "ResourceLink": {"name", "uri", "description", "mime_type"},
+            "ToolAnnotations": {"read_only_hint", "destructive_hint"},
+            "Prompt": {"name", "description", "arguments"},
+            "PromptArgument": {"name", "required"},
+            "Resource": {"name", "uri", "description", "mime_type"},
+            "BlobResourceContents": {"uri", "mime_type", "blob"},
+            "TextResourceContents": {"uri", "mime_type", "text"},
+        }
+        for type_name, fields in expectations.items():
+            model = getattr(types, type_name)
+            missing = fields - set(model.model_fields)
+            self.assertFalse(missing, f"{type_name} lost fields: {missing}")
+
     def test_private_http_client_factory_exists(self):
         # transports.py depends on this private path (mcp.shared._httpx_utils
         # is not part of the SDK's public surface); an SDK upgrade that moves

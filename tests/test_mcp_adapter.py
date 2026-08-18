@@ -183,5 +183,134 @@ class TestBuildMcpTool(unittest.TestCase):
         self.assertEqual(out, "ok")
 
 
+class TestRealSdkTypes(unittest.TestCase):
+    """Adaptation against REAL mcp.types objects, not fakes.
+
+    SDK 2.0 renamed every wire-format camelCase field to snake_case on its
+    pydantic models (inputSchema -> input_schema, isError -> is_error, ...).
+    The fakes elsewhere in this file use camelCase attributes and stayed
+    green while every real MCP tool registered with an empty schema — this
+    class exists so the fakes can never drift from the SDK again.
+    """
+
+    def real_tool(self):
+        from mcp.types import Tool, ToolAnnotations
+
+        return Tool.model_validate(
+            {
+                "name": "navigate",
+                "description": "Navigate to a URL",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"url": {"type": "string", "description": "Target URL"}},
+                    "required": ["url"],
+                },
+                "annotations": ToolAnnotations.model_validate({"destructiveHint": True}),
+            }
+        )
+
+    def test_real_tool_schema_reaches_signature_and_document(self):
+        from src.llm.tools import ToolRegistry
+
+        registry = ToolRegistry()
+        calls = []
+
+        async def call(name, args):
+            calls.append((name, args))
+            return call_result(text_item("ok"))
+
+        registry.register(build_mcp_tool("pw", self.real_tool(), call), source="mcp:pw")
+        tool_obj = registry.get("mcp__pw__navigate")
+        self.assertIn("url", registry.signature(tool_obj))
+        self.assertIn('"url"', registry.document("mcp__pw__navigate"))
+
+    def test_real_tool_annotations_mark_description(self):
+        async def call(name, args):
+            return call_result(text_item("ok"))
+
+        tool_obj = build_mcp_tool("pw", self.real_tool(), call)
+        self.assertIn("[DESTRUCTIVE]", tool_obj.description)
+
+    def test_real_error_result_gets_error_prefix(self):
+        from mcp.types import CallToolResult, TextContent
+
+        result = CallToolResult.model_validate({"content": [{"type": "text", "text": "boom"}], "isError": True})
+        out = serialize_call_result(result, server="pw", tool_name="navigate")
+        self.assertIn("[mcp error]", out)
+        self.assertIsInstance(result.content[0], TextContent)
+
+    def test_real_structured_content_is_serialized(self):
+        from mcp.types import CallToolResult
+
+        result = CallToolResult.model_validate({"content": [], "structuredContent": {"k": 1}})
+        out = serialize_call_result(result, server="pw", tool_name="navigate")
+        self.assertIn('"k": 1', out)
+
+    def test_real_image_content_attaches_with_its_mime(self):
+        from mcp.types import CallToolResult
+
+        result = CallToolResult.model_validate(
+            {"content": [{"type": "image", "data": "aGk=", "mimeType": "image/webp"}]}
+        )
+        with collecting_images() as images:
+            serialize_call_result(result, server="pw", tool_name="shot")
+        self.assertEqual(len(images), 1)
+        self.assertEqual(images[0]["mime_type"], "image/webp")
+
+
+class TestLinkedImageFiles(unittest.TestCase):
+    """Playwright-style results: a markdown link to a PNG on disk, no image block.
+
+    The server saves the screenshot and returns only text like
+    `- [Screenshot of viewport](.playwright-mcp/page-....png)` — without this
+    path the model stays blind to its own screenshots.
+    """
+
+    PNG_BYTES = bytes.fromhex(
+        "89504e470d0a1a0a0000000d494844520000000100000001080600000000"
+        "1f15c4890000000d49444154789c636000000002000155c2d37e00000000"
+        "49454e44ae426082"
+    )
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.png = Path(self.tmp.name) / "page-shot.png"
+        self.png.write_bytes(self.PNG_BYTES)
+
+    def serialize(self, text):
+        with collecting_images() as images:
+            out = serialize_call_result(call_result(text_item(text)), server="pw", tool_name="browser_take_screenshot")
+        return out, images
+
+    def test_markdown_link_to_existing_png_attaches(self):
+        out, images = self.serialize(f"### Result\n- [Screenshot of viewport]({self.png})")
+        self.assertEqual(len(images), 1)
+        self.assertEqual(images[0]["mime_type"], "image/png")
+        self.assertIn("attached", out)
+
+    def test_missing_file_is_left_alone(self):
+        out, images = self.serialize("- [Screenshot](/nowhere/gone.png)")
+        self.assertEqual(images, [])
+        self.assertIn("gone.png", out)
+
+    def test_oversized_file_is_skipped(self):
+        from unittest.mock import patch
+
+        from src.llm.tools.mcp import adapter
+
+        with patch.object(adapter, "MAX_LINKED_IMAGE_BYTES", 10):
+            out, images = self.serialize(f"[shot]({self.png})")
+        self.assertEqual(images, [])
+
+    def test_non_image_links_ignored(self):
+        report = Path(self.tmp.name) / "notes.txt"
+        report.write_text("hi", encoding="utf-8")
+        out, images = self.serialize(f"[notes]({report})")
+        self.assertEqual(images, [])
+
+
 if __name__ == "__main__":
     unittest.main()
