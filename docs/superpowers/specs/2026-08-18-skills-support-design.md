@@ -149,8 +149,9 @@ uv run python -m src.main skills import <name>... [--project]
 
 `src/config/settings.py`:
 
-- `skills_user_dir: Path = ~/.right-agent/skills` (constant default; tests inject paths through `SkillStore`, not env).
 - `skills_auto_import: bool = False` (env `SKILLS_AUTO_IMPORT`).
+
+The user directory is a module constant, not a setting: `store.DEFAULT_USER_SKILLS_DIR = ~/.right-agent/skills` — tests inject paths through `SkillStore`, never through env.
 
 No enable/disable env gate: the layer costs nothing (no models, no network, no subprocesses).
 
