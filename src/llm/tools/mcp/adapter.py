@@ -242,12 +242,16 @@ def _attach_linked_images(text: str, *, server: str, tool_name: str) -> str:
     return text
 
 
-def _serialize_content_item(item: Any, *, server: str, tool_name: str, parts: list[str]) -> None:
+def _serialize_content_item(
+    item: Any, *, server: str, tool_name: str, parts: list[str], scan_links: bool = True
+) -> None:
     """Render one MCP content block into `parts`, routing images out of band."""
     item_type = _read_field(item, "type")
     if item_type == "text":
         text = str(_read_field(item, "text", ""))
-        parts.append(_attach_linked_images(text, server=server, tool_name=tool_name))
+        if scan_links:
+            text = _attach_linked_images(text, server=server, tool_name=tool_name)
+        parts.append(text)
         return
     if item_type == "image":
         data = _read_field(item, "data", "") or ""
@@ -295,14 +299,22 @@ def serialize_call_result(result: Any, *, server: str, tool_name: str) -> str:
     appended as JSON, and an `isError` result is prefixed for visibility.
     """
     parts: list[str] = []
-    for item in _read_field(result, "content", []) or []:
-        _serialize_content_item(item, server=server, tool_name=tool_name, parts=parts)
+    content = _read_field(result, "content", []) or []
+    # A result that already carries a native image block does not need its
+    # markdown file links attached too — that shipped the same screenshot
+    # twice, and vision tokens are the expensive kind.
+    has_image_block = any(_read_field(item, "type") == "image" for item in content)
+    for item in content:
+        _serialize_content_item(item, server=server, tool_name=tool_name, parts=parts, scan_links=not has_image_block)
     structured = _read_field(result, "structuredContent")
     if structured is not None:
         parts.append(json.dumps(structured, ensure_ascii=False, default=repr))
     text = "\n".join(part for part in parts if part) or "(empty result)"
     if _read_field(result, "isError", False):
-        return f"[mcp error] {server}: {text}"
+        # Weak models loop on wrong arguments instead of reading contracts;
+        # the error itself is the moment to point them at the contract.
+        hint = f'if the arguments were wrong, fetch the contract: get_tool(["{build_tool_name(server, tool_name)}"])'
+        return f"[mcp error] {server}: {text}\n[{hint}]"
     return text
 
 

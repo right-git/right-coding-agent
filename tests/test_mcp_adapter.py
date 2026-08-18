@@ -314,3 +314,29 @@ class TestLinkedImageFiles(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestErrorHintAndImageDedupe(unittest.TestCase):
+    def test_error_result_points_at_get_tool_with_registry_name(self):
+        result = call_result(text_item('"Open chat" does not match any elements'), is_error=True)
+        out = serialize_call_result(result, server="pw", tool_name="browser_click")
+        self.assertIn("[mcp error]", out)
+        self.assertIn('get_tool(["mcp__pw__browser_click"])', out)
+
+    def test_success_result_has_no_get_tool_hint(self):
+        out = serialize_call_result(call_result(text_item("ok")), server="pw", tool_name="browser_click")
+        self.assertNotIn("get_tool", out)
+
+    def test_native_image_block_suppresses_linked_file_attach(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            png = Path(tmp) / "shot.png"
+            png.write_bytes(TestLinkedImageFiles.PNG_BYTES)
+            result = call_result(
+                text_item(f"- [Screenshot]({png})"),
+                image_item(),
+            )
+            with collecting_images() as images:
+                serialize_call_result(result, server="pw", tool_name="shot")
+        self.assertEqual(len(images), 1)
