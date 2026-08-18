@@ -64,7 +64,10 @@ def run_skills_cli(
     if unknown:
         print(f"unknown skill(s): {', '.join(unknown)}")
         return 1
-    target = (project_root or Path.cwd()) / PROJECT_SKILLS_SUBPATH if args.project else user_dir
+    if args.project and project_root is None:
+        print("--project requires a project root")
+        return 1
+    target = project_root / PROJECT_SKILLS_SUBPATH if args.project else user_dir
     copied, skipped, failed = import_skills(candidates, target, names=args.names or None)
     print(f"imported {len(copied)}: {', '.join(copied) or '—'}")
     if skipped:

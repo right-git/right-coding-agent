@@ -23,10 +23,10 @@ class TestSkillsCli(unittest.TestCase):
         self.user_dir.mkdir()
         make_skill_dir(self.user_dir, "mine", "---\ndescription: local\n---\nbody\n")
 
-    def run_cli(self, argv) -> tuple[int, str]:
+    def run_cli(self, argv, project_root=None) -> tuple[int, str]:
         buffer = io.StringIO()
         with redirect_stdout(buffer):
-            code = run_skills_cli(argv, user_dir=self.user_dir, project_root=None, home=self.home)
+            code = run_skills_cli(argv, user_dir=self.user_dir, project_root=project_root, home=self.home)
         return code, buffer.getvalue()
 
     def test_list(self):
@@ -47,6 +47,27 @@ class TestSkillsCli(unittest.TestCase):
     def test_import_by_name_unknown(self):
         code, output = self.run_cli(["import", "nosuch"])
         self.assertEqual(code, 1)
+
+    def test_import_all_project(self):
+        # Test that --project targets project_root/.agents/skills
+        project_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(project_tmp.cleanup)
+        project_root = Path(project_tmp.name)
+        code, output = self.run_cli(["import", "--all", "--project"], project_root=project_root)
+        self.assertEqual(code, 0)
+        # Verify skill was copied to project/.agents/skills, not elsewhere
+        expected_path = project_root / ".agents" / "skills" / "found" / "SKILL.md"
+        self.assertTrue(expected_path.is_file(), f"Expected {expected_path} to exist")
+        # Verify nothing was written outside the tmp tree
+        self.assertFalse((self.user_dir / "found").exists())
+
+    def test_import_all_project_no_root(self):
+        # Test that --project without project_root returns error code 1
+        code, output = self.run_cli(["import", "--all", "--project"], project_root=None)
+        self.assertEqual(code, 1)
+        self.assertIn("--project requires a project root", output)
+        # Verify nothing was written to the user dir
+        self.assertFalse((self.user_dir / "found").exists())
 
 
 if __name__ == "__main__":
