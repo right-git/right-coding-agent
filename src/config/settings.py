@@ -60,6 +60,18 @@ class Settings(BaseSettings):
         default=None,
         description="Fixed speech language code such as 'ru'; None auto-detects per utterance.",
     )
+    mcp_connect_timeout: float = Field(
+        default=30.0,
+        description="Seconds to wait for an MCP server to connect and initialize.",
+    )
+    mcp_tool_timeout: float = Field(
+        default=60.0,
+        description="Seconds to wait for a single MCP tool call.",
+    )
+    mcp_oauth_port: int = Field(
+        default=43110,
+        description="Localhost port for the MCP OAuth redirect callback.",
+    )
     fish_audio_api_key: str | None = Field(default=None, description="Fish Audio API key (planned cloud TTS).")
     fish_audio_tts_model: str = Field(default="s2.1-pro", description="Fish Audio TTS model name.")
     elevenlabs_api_key: str | None = Field(default=None, description="ElevenLabs API key (planned cloud TTS).")
