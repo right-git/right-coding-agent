@@ -12,6 +12,8 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.types import Command
 from src.config.logging import logger
 from src.config.routing import load_provider_pins, provider_order_for
+
+from .providers import ReasoningChatOpenAI
 from .types import AgentTool, LLMProvider, T
 
 
@@ -148,15 +150,22 @@ class LLMClient:
     ) -> BaseChatModel:
         selected_provider = provider or self.get_default_provider()
         resolved_model_name = self.resolve_model_name(selected_provider, model_name)
-        return init_chat_model(
-            **self.build_client_kwargs(
-                provider=selected_provider,
-                model_name=resolved_model_name,
-                temperature=temperature,
-                seed=seed,
-                reasoning_effort=reasoning_effort,
-            )
+        client_kwargs = self.build_client_kwargs(
+            provider=selected_provider,
+            model_name=resolved_model_name,
+            temperature=temperature,
+            seed=seed,
+            reasoning_effort=reasoning_effort,
         )
+        if client_kwargs.get("model_provider") == "openai":
+            # `init_chat_model` would hand back a stock ChatOpenAI, which
+            # discards the provider's `reasoning` deltas (see
+            # providers/reasoning.py) and leaves the turn ticker with nothing
+            # to show while the model thinks. Azure and every other provider
+            # still go through init_chat_model.
+            kwargs = {key: value for key, value in client_kwargs.items() if key != "model_provider"}
+            return ReasoningChatOpenAI(**kwargs)
+        return init_chat_model(**client_kwargs)
 
     async def ask_agent(
         self,
@@ -174,6 +183,7 @@ class LLMClient:
         thread_id: str | None = None,
         on_message: Callable[[Any], None] | None = None,
         on_token: Callable[[str], None] | None = None,
+        on_reasoning: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         if not self.providers:
             raise RuntimeError("No LLM providers configured")
@@ -229,10 +239,12 @@ class LLMClient:
                     )
 
                     stage = "invoke_agent"
-                    if on_message is None and on_token is None:
+                    if on_message is None and on_token is None and on_reasoning is None:
                         response = await agent.ainvoke(input=agent_input, context=context, config=config)
                     else:
-                        response = await self._stream_agent(agent, agent_input, context, config, on_message, on_token)
+                        response = await self._stream_agent(
+                            agent, agent_input, context, config, on_message, on_token, on_reasoning
+                        )
 
                     if thread_id:
                         self._agent_cache[thread_id] = agent
@@ -291,15 +303,18 @@ class LLMClient:
         config: dict[str, Any] | None,
         on_message: Callable[[Any], None] | None,
         on_token: Callable[[str], None] | None,
+        on_reasoning: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         """Run the agent while forwarding events as they happen.
 
         `updates` chunks carry every newly produced message (tool calls and
         tool results included) the moment a node finishes; `messages` chunks
         carry the model's own tokens; the last `values` chunk is the same
-        final state `ainvoke` would have returned.
+        final state `ainvoke` would have returned. Answer text and reasoning
+        arrive on the same `messages` chunks but leave on separate callbacks —
+        reasoning must never reach TTS or the answer buffer.
         """
-        modes = ["updates", "values"] + (["messages"] if on_token else [])
+        modes = ["updates", "values"] + (["messages"] if (on_token or on_reasoning) else [])
         response: dict[str, Any] | None = None
 
         async for mode, chunk in agent.astream(input=agent_input, context=context, config=config, stream_mode=modes):
@@ -311,6 +326,11 @@ class LLMClient:
                     continue  # e.g. the summarization middleware's own model call
                 if not isinstance(piece, AIMessageChunk):
                     continue
+                # ReasoningChatOpenAI parks the provider's reasoning here;
+                # `.text` never contains it.
+                thought = (piece.additional_kwargs or {}).get("reasoning")
+                if isinstance(thought, str) and thought:
+                    self._forward(on_reasoning, thought)
                 # .text is a property; do NOT call it — the compat shim it
                 # returns is callable and calling it warns on every token.
                 text = str(piece.text)

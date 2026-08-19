@@ -20,6 +20,7 @@ class Agents(LLMClient):
         voice_mode: bool = False,
         on_message=None,
         on_token=None,
+        on_reasoning=None,
     ):
         # The agent's whole tool surface is the single run_tools meta tool:
         # every other capability is discovered via the in-script
@@ -40,6 +41,7 @@ class Agents(LLMClient):
             temperature=temperature,
             on_message=on_message,
             on_token=on_token,
+            on_reasoning=on_reasoning,
             middlewares=[
                 # Runs first so screenshots captured by tools become a vision
                 # message before summarization ever touches the tool tail.

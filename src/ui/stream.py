@@ -4,8 +4,9 @@
 the terminal and yields a `TurnStream`. The LLM layer drives it with two
 callbacks while the turn runs: `on_token` accumulates the model's streamed
 text and shows it in full while it is written (only the terminal's height
-crops it), `on_message` prints tool calls and tool results the moment they
-happen — plus a dim "thought for Ns" line before each action, so the wait is
+crops it), `on_reasoning` fills that same space, dimmed, while the model is
+still thinking, `on_message` prints tool calls and tool results the moment
+they happen — plus a dim "thought for Ns" line before each action, so the wait is
 always attributed. The first streamed token ends the "thinking" phase and
 flips the label to "responding": tokens are answer text by construction,
 never reasoning. Regular console prints
@@ -57,18 +58,22 @@ class TurnStream:
         self.printed_ids: set[str] = set()
         self._seen: set[str] = set()
         self._text = ""
+        self._reasoning = ""
 
     def __rich_console__(self, console, options):
         # The answer is shown as it streams, wrapped and undimmed — it is the
-        # result, not a peek at one. Only the terminal's own height limits it:
-        # the newest lines win, so the text being written is always on screen.
-        if self._text:
+        # result, not a peek at one. Until it starts, the model's reasoning
+        # fills the same space, dimmed, so a long "thinking" is never a blank
+        # wait. Only the terminal's own height limits either: the newest lines
+        # win, so what is being written is always on screen.
+        body, style = (self._text, None) if self._text else (self._reasoning, "info")
+        if body:
             height = getattr(options, "max_height", None) or console.size.height
             budget = max(1, height - 2)  # leave room for the ticker line
             width = max(TEXT_MIN_WIDTH, options.max_width - len(TEXT_INDENT))
-            wrapped = Text(self._text.strip()).wrap(console, width, overflow="fold")
+            wrapped = Text(body.strip(), style=style or "").wrap(console, width, overflow="fold")
             for line in wrapped[-budget:]:
-                yield Text(TEXT_INDENT).append_text(line)
+                yield Text(TEXT_INDENT, style=style or "").append_text(line)
         frame = TICKER_FRAMES[int(time.monotonic() * 10) % len(TICKER_FRAMES)]
         yield Text(
             f"  {frame} {self.ticker.label}… {format_duration(self.ticker.elapsed)}",
@@ -90,9 +95,19 @@ class TurnStream:
             self._announce_thought()
             if self.ticker.label == "thinking":
                 self.ticker.reset("responding")
+            self._reasoning = ""  # the answer takes over the live view
             self._text += piece
         except Exception:
             logger.exception("Failed to buffer streamed text")
+
+    def on_reasoning(self, piece: str) -> None:
+        """Buffer the model's reasoning; unlike answer text it does not end
+        the thinking phase — it is what the thinking *is*."""
+        try:
+            if piece:
+                self._reasoning += piece
+        except Exception:
+            logger.exception("Failed to buffer streamed reasoning")
 
     def on_message(self, message) -> None:
         try:
@@ -125,6 +140,7 @@ class TurnStream:
             if identifier:
                 self.printed_ids.add(identifier)
             self._text = ""
+            self._reasoning = ""
             self.ticker.reset("running tools")
         else:
             # The final answer: announce the thinking time (a no-op once the

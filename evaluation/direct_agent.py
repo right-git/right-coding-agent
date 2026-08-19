@@ -37,6 +37,7 @@ class DirectAgents(Agents):
         voice_mode: bool = False,
         on_message=None,
         on_token=None,
+        on_reasoning=None,
     ):
         # Mirrors Agents.right_coding_agent so only the tool wiring differs.
         session_context = Prompts.session_context(tool_count=len(DIRECT_TOOLS))
@@ -50,6 +51,7 @@ class DirectAgents(Agents):
             temperature=temperature,
             on_message=on_message,
             on_token=on_token,
+            on_reasoning=on_reasoning,
             middlewares=[
                 AttachedImagesMiddleware(),
                 SummarizationMiddleware(
@@ -78,6 +80,7 @@ class DirectAgents(Agents):
         voice_mode: bool = False,
         on_message=None,
         on_token=None,
+        on_reasoning=None,
     ):
         return await self.direct_coding_agent(
             messages=messages,
@@ -88,4 +91,5 @@ class DirectAgents(Agents):
             voice_mode=voice_mode,
             on_message=on_message,
             on_token=on_token,
+            on_reasoning=on_reasoning,
         )

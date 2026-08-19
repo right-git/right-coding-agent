@@ -172,13 +172,16 @@ def make_sigint_handler(policy: InterruptPolicy, ui, current_turn: dict, *, forc
 
 
 def turn_callbacks(ui: ChatUI, stream) -> tuple:
-    """The turn's (on_message, on_token) pair; tees tokens into TTS in voice mode."""
+    """The turn's (on_message, on_token, on_reasoning) triple; tees answer
+    tokens into TTS in voice mode. Reasoning is deliberately left out of that
+    tee — it is scratch work, not something to read aloud."""
     on_message = getattr(stream, "on_message", None)
     on_token = getattr(stream, "on_token", None)
+    on_reasoning = getattr(stream, "on_reasoning", None)
     voice = getattr(ui, "voice", None)
     if voice is not None and voice.speak_replies:
         on_token = voice.wrap_on_token(on_token)
-    return on_message, on_token
+    return on_message, on_token, on_reasoning
 
 
 async def process_user_turn(
@@ -227,7 +230,7 @@ async def process_user_turn(
 
     try:
         with ui.turn_stream() as stream:
-            on_message, on_token = turn_callbacks(ui, stream)
+            on_message, on_token, on_reasoning = turn_callbacks(ui, stream)
             on_message = collecting(on_message)
             response = await ui.run_cancellable(
                 agents.right_coding_agent(
@@ -238,6 +241,7 @@ async def process_user_turn(
                     voice_mode=voice_mode,
                     on_message=on_message,
                     on_token=on_token,
+                    on_reasoning=on_reasoning,
                 )
             )
         if stream is not None:
@@ -256,7 +260,7 @@ async def process_user_turn(
                 HumanMessage(EMPTY_RESPONSE_NUDGE),
             ]
             with ui.turn_stream() as stream:
-                on_message, on_token = turn_callbacks(ui, stream)
+                on_message, on_token, on_reasoning = turn_callbacks(ui, stream)
                 on_message = collecting(on_message)
                 response = await ui.run_cancellable(
                     agents.right_coding_agent(
@@ -267,6 +271,7 @@ async def process_user_turn(
                         voice_mode=voice_mode,
                         on_message=on_message,
                         on_token=on_token,
+                        on_reasoning=on_reasoning,
                     )
                 )
             if stream is not None:
